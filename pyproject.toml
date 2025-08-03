@@ -1,0 +1,45 @@
+[project]
+name = "pyai"
+version = "0.1.0"
+description = "Pydantic-AI Multi-Agent System"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic-ai[openai,anthropic]>=0.4.11",
+    "streamlit>=1.28.0",
+    "httpx>=0.25.0",
+    "youtube-transcript-api>=0.6.0",
+    "tavily-python>=0.3.0",
+    "python-dotenv>=1.0.0",
+    "asyncio>=3.4.3",
+    "fastapi-mcp>=0.4.0",
+    "pydantic>=2.11.7",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+    "dirty-equals>=0.6.0",
+    "inline-snapshot>=0.8.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+    "dirty-equals>=0.6.0",
+    "inline-snapshot>=0.8.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+]
+
+[dependency-groups]
+test = [
+    "anyio>=4.9.0",
+    "dirty-equals>=0.9.0",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-mock>=3.14.1",
+]
