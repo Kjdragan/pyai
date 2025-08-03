@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from pydantic_ai import models
 from pydantic_ai.models.test import TestModel
 
-# Disable real model requests globally for tests
-models.ALLOW_MODEL_REQUESTS = False
+# Enable real model requests for integration and agent tests
+models.ALLOW_MODEL_REQUESTS = True
 
 # Mark all tests as async by default
 pytestmark = pytest.mark.anyio

@@ -50,9 +50,9 @@ class TestYouTubeAgent:
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
-        assert isinstance(result.data, YouTubeTranscriptModel)
-        assert result.data.url is not None
-        assert result.data.transcript is not None
+        assert isinstance(result.output, YouTubeTranscriptModel)
+        assert result.output.url is not None
+        assert result.output.transcript is not None
     
     @patch('agents.youtube_agent.fetch_youtube_transcript')
     async def test_process_youtube_request_success(self, mock_fetch):
@@ -96,9 +96,9 @@ class TestWeatherAgent:
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
-        assert isinstance(result.data, WeatherModel)
-        assert result.data.location is not None
-        assert result.data.current is not None
+        assert isinstance(result.output, WeatherModel)
+        assert result.output.location is not None
+        assert result.output.current is not None
     
     @patch('agents.weather_agent.fetch_current_weather')
     @patch('agents.weather_agent.fetch_weather_forecast')
@@ -142,9 +142,9 @@ class TestResearchAgents:
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
-        assert isinstance(result.data, ResearchPipelineModel)
-        assert result.data.original_query is not None
-        assert result.data.pipeline_type == "tavily"
+        assert isinstance(result.output, ResearchPipelineModel)
+        assert result.output.original_query is not None
+        assert result.output.pipeline_type == "tavily"
     
     async def test_duckduckgo_research_agent_with_test_model(self, test_model):
         """Test DuckDuckGo research agent using TestModel."""
@@ -154,9 +154,9 @@ class TestResearchAgents:
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
-        assert isinstance(result.data, ResearchPipelineModel)
-        assert result.data.original_query is not None
-        assert result.data.pipeline_type == "duckduckgo"
+        assert isinstance(result.output, ResearchPipelineModel)
+        assert result.output.original_query is not None
+        assert result.output.pipeline_type == "duckduckgo"
     
     @patch('agents.research_tavily_agent.TavilyClient')
     @patch('agents.research_tavily_agent.expand_query_to_subquestions')
@@ -197,9 +197,9 @@ class TestReportWriterAgent:
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
-        assert isinstance(result.data, ReportGenerationModel)
-        assert result.data.style is not None
-        assert result.data.final is not None
+        assert isinstance(result.output, ReportGenerationModel)
+        assert result.output.style is not None
+        assert result.output.final is not None
     
     async def test_process_report_request_with_research_data(self):
         """Test report generation from research data."""
