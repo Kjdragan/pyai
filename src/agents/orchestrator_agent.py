@@ -21,6 +21,7 @@ from agents.weather_agent import process_weather_request
 from agents.research_tavily_agent import process_tavily_research_request
 from agents.research_duckduckgo_agent import process_duckduckgo_research_request
 from agents.report_writer_agent import process_report_request
+from research_logger import ResearchDataLogger
 
 
 class OrchestratorDeps:
@@ -262,11 +263,17 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
             
             response = await process_youtube_request(url)
             if response.success:
-                master_output.youtube_data = YouTubeTranscriptModel(**response.data)
+                youtube_model = YouTubeTranscriptModel(**response.data)
+                master_output.youtube_data = youtube_model
+                
+                # Log YouTube data state
+                logger = ResearchDataLogger()
+                logger.log_youtube_state(youtube_model, master_output)
+                
                 yield StreamingUpdate(
                     update_type="partial_result",
                     agent_name="YouTubeAgent",
-                    message="YouTube transcript retrieved successfully",
+                    message=f"YouTube transcript retrieved for {url}",
                     data=response.data
                 )
             else:
@@ -290,7 +297,13 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
             
             response = await process_weather_request(location)
             if response.success:
-                master_output.weather_data = WeatherModel(**response.data)
+                weather_model = WeatherModel(**response.data)
+                master_output.weather_data = weather_model
+                
+                # Log weather data state
+                logger = ResearchDataLogger()
+                logger.log_weather_state(weather_model, master_output)
+                
                 yield StreamingUpdate(
                     update_type="partial_result",
                     agent_name="WeatherAgent",
@@ -325,7 +338,13 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
             
             # Process Tavily results
             if isinstance(tavily_response, AgentResponse) and tavily_response.success:
-                master_output.research_data = ResearchPipelineModel(**tavily_response.data)
+                research_model = ResearchPipelineModel(**tavily_response.data)
+                master_output.research_data = research_model
+                
+                # Log research data state
+                logger = ResearchDataLogger()
+                logger.log_research_state(research_model, master_output)
+                
                 yield StreamingUpdate(
                     update_type="partial_result",
                     agent_name="TavilyResearchAgent",
@@ -343,7 +362,13 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
             
             # Process DuckDuckGo results (as backup if Tavily failed)
             if isinstance(ddg_response, AgentResponse) and ddg_response.success and not master_output.research_data:
-                master_output.research_data = ResearchPipelineModel(**ddg_response.data)
+                research_model = ResearchPipelineModel(**ddg_response.data)
+                master_output.research_data = research_model
+                
+                # Log research data state
+                logger = ResearchDataLogger()
+                logger.log_research_state(research_model, master_output)
+                
                 yield StreamingUpdate(
                     update_type="partial_result",
                     agent_name="DuckDuckGoResearchAgent",
@@ -392,11 +417,17 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
                 report_response = await process_report_request(dummy_research, job_request.report_style)
             
             if report_response.success:
-                master_output.report_data = ReportGenerationModel(**report_response.data)
+                report_model = ReportGenerationModel(**report_response.data)
+                master_output.report_data = report_model
+                
+                # Log report data state
+                logger = ResearchDataLogger()
+                logger.log_report_state(report_model, master_output)
+                
                 yield StreamingUpdate(
                     update_type="partial_result",
                     agent_name="ReportWriterAgent",
-                    message=f"{job_request.report_style.title()} report generated",
+                    message="Report generated successfully",
                     data=report_response.data
                 )
             else:

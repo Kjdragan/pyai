@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Research Pipeline Diagram</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .mermaid {
+            margin: 20px 0;
+        }
+        .description {
+            margin-top: 30px;
+            line-height: 1.6;
+        }
+        .section {
+            margin-bottom: 20px;
+        }
+        .section h2 {
+            color: #444;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Multi-Agent Research Pipeline Diagram</h1>
+        
+        <div class="mermaid">
+graph TD
+    %% Main components
+    User[User Input] --> Orchestrator[Orchestrator Agent]
+    Orchestrator --> JobParser[Job Request Parser]
+    
+    %% Job type determination
+    JobParser --> JobType{Job Type?}
+    
+    %% YouTube branch
+    JobType -->|YouTube| YouTube[YouTube Agent]
+    YouTube --> TranscriptFetch[Fetch Transcript]
+    TranscriptFetch --> TranscriptModel[YouTube Transcript Model]
+    
+    %% Weather branch
+    JobType -->|Weather| Weather[Weather Agent]
+    Weather --> WeatherAPI[OpenWeather API]
+    WeatherAPI --> WeatherModel[Weather Model]
+    
+    %% Research branch - main focus
+    JobType -->|Research| Research{Research Pipeline}
+    Research --> QueryExpansion[Query Expansion<br>Past/Present/Future]
+    
+    %% Parallel research paths
+    QueryExpansion --> TavilyPath[Tavily Research Path]
+    QueryExpansion --> DuckDuckGoPath[DuckDuckGo Research Path]
+    
+    %% Tavily research flow
+    TavilyPath --> TavilyAgent[Tavily Research Agent]
+    TavilyAgent --> TavilyAPI[Tavily API<br>Advanced Search]
+    TavilyAPI --> TavilyResults[Tavily Results<br>Filtering & Scoring]
+    
+    %% DuckDuckGo research flow
+    DuckDuckGoPath --> DDGAgent[DuckDuckGo Research Agent]
+    DDGAgent --> DDGSearch[DuckDuckGo Search API]
+    DDGSearch --> DDGResults[DDG Results<br>Filtering & Scoring]
+    
+    %% Results aggregation
+    TavilyResults --> ResearchAggregation[Research Results Aggregation]
+    DDGResults --> ResearchAggregation
+    ResearchAggregation --> ResearchModel[Research Pipeline Model]
+    
+    %% Report generation
+    JobType -->|Report| ReportWriter[Report Writer Agent]
+    TranscriptModel --> ReportWriter
+    WeatherModel --> ReportWriter
+    ResearchModel --> ReportWriter
+    ReportWriter --> ReportGeneration[Report Generation<br>GPT-4o-mini]
+    ReportGeneration --> ReportModel[Report Model]
+    
+    %% Final output
+    TranscriptModel --> MasterOutput[Master Output Model]
+    WeatherModel --> MasterOutput
+    ResearchModel --> MasterOutput
+    ReportModel --> MasterOutput
+    MasterOutput --> StreamingUpdates[Streaming Updates to UI]
+    
+    %% Styling
+    classDef agent fill:#f9d5e5,stroke:#333,stroke-width:2px
+    classDef model fill:#eeeeee,stroke:#333,stroke-width:1px
+    classDef api fill:#d5f9e5,stroke:#333,stroke-width:1px
+    classDef process fill:#e5d5f9,stroke:#333,stroke-width:1px
+    
+    class Orchestrator,YouTube,Weather,TavilyAgent,DDGAgent,ReportWriter agent
+    class TranscriptModel,WeatherModel,ResearchModel,ReportModel,MasterOutput model
+    class TavilyAPI,WeatherAPI,DDGSearch api
+    class QueryExpansion,ResearchAggregation,ReportGeneration process
+        </div>
+        
+        <div class="description">
+            <div class="section">
+                <h2>1. User Input Processing</h2>
+                <p>The Orchestrator Agent receives the user query and the Job Request Parser determines the job type (YouTube, Weather, Research, or Report).</p>
+            </div>
+            
+            <div class="section">
+                <h2>2. Research Pipeline (Main Focus)</h2>
+                <p><strong>Query Expansion:</strong> The original query is expanded into 3 sub-questions covering past, present, and future perspectives.</p>
+                <p><strong>Parallel Research Paths:</strong></p>
+                <ul>
+                    <li><strong>Tavily Research Path:</strong> Uses advanced search with relevance scoring, raw content extraction for better precision, and filters results by relevance score (>0.5).</li>
+                    <li><strong>DuckDuckGo Research Path:</strong> Performs web search with snippet extraction, and filters and ranks results.</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>3. Results Processing</h2>
+                <p>Research results are aggregated from both paths, structured into a ResearchPipelineModel, and passed to the Report Writer Agent.</p>
+            </div>
+            
+            <div class="section">
+                <h2>4. Report Generation</h2>
+                <p>The Report Writer Agent synthesizes information, formats according to the requested style (comprehensive, top_10, summary), and creates the final report using GPT-4o-mini.</p>
+            </div>
+            
+            <div class="section">
+                <h2>5. Output Delivery</h2>
+                <p>All results are combined in a MasterOutputModel, and streaming updates are sent to the UI.</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: { 
+                useMaxWidth: false,
+                htmlLabels: true
+            }
+        });
+    </script>
+</body>
+</html>

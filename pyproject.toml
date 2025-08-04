@@ -17,6 +17,7 @@ dependencies = [
     "pydantic-ai-slim[openai]>=0.4.11",
     "logfire[httpx]>=4.0.1",
     "psutil>=7.0.0",
+    "pytube>=15.0.0",
 ]
 
 [project.optional-dependencies]
