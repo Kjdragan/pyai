@@ -157,21 +157,79 @@ def run_streamlit():
     """Launch the Streamlit web interface."""
     import subprocess
     import sys
+    import os
     
     system_logger.info(f"Launching Streamlit web interface on {config.STREAMLIT_HOST}:{config.STREAMLIT_PORT}")
     print("🚀 Launching Streamlit web interface...")
     
     try:
-        # Run streamlit app
-        subprocess.run([
+        # Determine correct path to streamlit_app.py
+        current_dir = os.getcwd()
+        if current_dir.endswith('/src'):
+            streamlit_path = "streamlit_app.py"
+        else:
+            streamlit_path = "src/streamlit_app.py"
+        
+        system_logger.debug(f"Current directory: {current_dir}")
+        system_logger.debug(f"Streamlit app path: {streamlit_path}")
+        
+        # Verify file exists
+        if not os.path.exists(streamlit_path):
+            error_msg = f"Streamlit app not found at: {streamlit_path}"
+            system_logger.error(error_msg)
+            print(f"❌ {error_msg}")
+            return
+        
+        # Run streamlit app with output capture
+        system_logger.info("Starting Streamlit subprocess with output capture")
+        
+        process = subprocess.Popen([
             sys.executable, "-m", "streamlit", "run", 
-            "src/streamlit_app.py",
+            streamlit_path,
             "--server.port", str(config.STREAMLIT_PORT),
             "--server.address", config.STREAMLIT_HOST
-        ])
-        system_logger.info("Streamlit process completed")
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
+        
+        # Stream output in real-time
+        import threading
+        
+        def log_output(pipe, log_func, prefix):
+            """Log subprocess output line by line."""
+            try:
+                for line in iter(pipe.readline, ''):
+                    if line.strip():
+                        log_func(f"[{prefix}] {line.strip()}")
+            except Exception as e:
+                system_logger.error(f"Error reading {prefix}: {e}")
+            finally:
+                pipe.close()
+        
+        # Start threads to capture stdout and stderr
+        stdout_thread = threading.Thread(
+            target=log_output, 
+            args=(process.stdout, system_logger.info, "streamlit-stdout")
+        )
+        stderr_thread = threading.Thread(
+            target=log_output, 
+            args=(process.stderr, system_logger.error, "streamlit-stderr")
+        )
+        
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        # Wait for process completion
+        return_code = process.wait()
+        
+        # Wait for logging threads to finish
+        stdout_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
+        
+        system_logger.info(f"Streamlit process completed with return code: {return_code}")
     except Exception as e:
         system_logger.exception(f"Error launching Streamlit: {str(e)}")
+        print(f"❌ Error launching Streamlit: {str(e)}")
         raise
 
 

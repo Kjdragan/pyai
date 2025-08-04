@@ -14,6 +14,27 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Initialize logging system for Streamlit (ensure proper initialization)
+try:
+    from logging_config import get_logging_manager, get_logger, initialize_logging
+    
+    # Always initialize logging for Streamlit subprocess
+    logging_manager = initialize_logging(
+        logs_dir=os.path.join(os.path.dirname(__file__), "logs"),
+        enable_logfire=False  # Disable Logfire in subprocess to avoid conflicts
+    )
+    
+    streamlit_logger = get_logger("streamlit_app")
+    streamlit_logger.info("Streamlit logging initialized successfully")
+    
+except Exception as e:
+    # Fallback to basic logging if our system fails
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    streamlit_logger = logging.getLogger("streamlit_app")
+    streamlit_logger.error(f"Failed to initialize comprehensive logging: {e}")
+    print(f"Logging fallback: {e}")
+
 from agents import run_orchestrator_job
 from models import StreamingUpdate, JobRequest
 from config import config
@@ -21,12 +42,19 @@ from config import config
 
 def initialize_session_state():
     """Initialize Streamlit session state variables."""
+    streamlit_logger.debug("Initializing Streamlit session state")
+    
     if "messages" not in st.session_state:
         st.session_state.messages = []
+        streamlit_logger.debug("Initialized messages list")
     if "job_history" not in st.session_state:
         st.session_state.job_history = []
+        streamlit_logger.debug("Initialized job history")
     if "current_job" not in st.session_state:
         st.session_state.current_job = None
+        streamlit_logger.debug("Initialized current job state")
+    
+    streamlit_logger.info("Streamlit session state initialized successfully")
 
 
 def display_streaming_update(update: StreamingUpdate):
@@ -222,6 +250,8 @@ def display_report_results(report_data: Dict[str, Any]):
 
 async def process_user_input(user_input: str):
     """Process user input through the orchestrator."""
+    streamlit_logger.info(f"Processing user input: {user_input}")
+    
     # Create placeholder for streaming updates
     status_placeholder = st.empty()
     updates_container = st.container()
@@ -229,8 +259,12 @@ async def process_user_input(user_input: str):
     final_result = None
     
     try:
+        streamlit_logger.debug("Starting orchestrator job with streaming")
+        
         # Run orchestrator job with streaming
         async for update in run_orchestrator_job(user_input):
+            streamlit_logger.debug(f"Received update: {update.update_type} from {update.agent_name}")
+            
             with updates_container:
                 display_streaming_update(update)
             
@@ -239,8 +273,10 @@ async def process_user_input(user_input: str):
                 if update.update_type == "final_result":
                     st.success("✅ Job completed successfully!")
                     final_result = update.data
+                    streamlit_logger.info("Job completed successfully")
                 elif update.update_type == "error" and update.agent_name == "Orchestrator":
                     st.error("❌ Job failed")
+                    streamlit_logger.error(f"Job failed: {update.message}")
                 else:
                     st.info(f"🔄 {update.agent_name}: {update.message}")
         
@@ -257,63 +293,97 @@ async def process_user_input(user_input: str):
             })
     
     except Exception as e:
-        st.error(f"Error processing request: {str(e)}")
+        error_msg = f"Error processing request: {str(e)}"
+        streamlit_logger.exception(error_msg)
+        st.error(error_msg)
 
 
 def main():
     """Main Streamlit application."""
-    st.set_page_config(
-        page_title="Pydantic-AI Multi-Agent System",
-        page_icon="🤖",
-        layout="wide"
-    )
-    
-    st.title("🤖 Pydantic-AI Multi-Agent System")
-    st.markdown("*Conversational AI with specialized agents for YouTube, Weather, Research, and Report Generation*")
-    
-    # Initialize session state
-    initialize_session_state()
+    try:
+        streamlit_logger.info("Starting Streamlit application")
+        
+        st.set_page_config(
+            page_title="Pydantic-AI Multi-Agent System",
+            page_icon="🤖",
+            layout="wide"
+        )
+        
+        st.title("🤖 Pydantic-AI Multi-Agent System")
+        st.markdown("*Conversational AI with specialized agents for YouTube, Weather, Research, and Report Generation*")
+        
+        streamlit_logger.debug("Streamlit UI components initialized")
+        
+        # Initialize session state
+        initialize_session_state()
+        
+    except Exception as e:
+        error_msg = f"Error initializing Streamlit app: {str(e)}"
+        streamlit_logger.exception(error_msg)
+        st.error(f"❌ Application Error: {error_msg}")
+        st.error("Please check the logs for detailed error information.")
+        return
     
     # Sidebar with configuration and history
-    with st.sidebar:
-        st.header("⚙️ Configuration")
-        
-        # API Key status
-        missing_keys = config.validate_required_keys()
-        if missing_keys:
-            st.error(f"Missing API keys: {', '.join(missing_keys)}")
-            st.info("Please set the required environment variables.")
-        else:
-            st.success("✅ All required API keys configured")
-        
-        # Agent status
-        st.header("🤖 Available Agents")
-        agents = [
-            "📺 YouTube Agent",
-            "🌤️ Weather Agent", 
-            "🔍 Tavily Research",
-            "🔍 DuckDuckGo Research",
-            "📄 Report Writer",
-            "🎯 Orchestrator"
-        ]
-        for agent in agents:
-            st.write(f"✅ {agent}")
-        
-        # Job history
-        if st.session_state.job_history:
-            st.header("📋 Job History")
-            for i, job in enumerate(reversed(st.session_state.job_history[-5:]), 1):
-                with st.expander(f"Job {len(st.session_state.job_history) - i + 1}"):
-                    st.write(f"**Query:** {job['query']}")
-                    st.write(f"**Time:** {job['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+    try:
+        with st.sidebar:
+            st.header("⚙️ Configuration")
+            
+            # API Key status
+            try:
+                missing_keys = config.validate_required_keys()
+                if missing_keys:
+                    st.error(f"Missing API keys: {', '.join(missing_keys)}")
+                    st.info("Please set the required environment variables.")
+                    streamlit_logger.warning(f"Missing API keys: {missing_keys}")
+                else:
+                    st.success("✅ All required API keys configured")
+                    streamlit_logger.info("All required API keys configured")
+            except Exception as e:
+                error_msg = f"Error validating API keys: {str(e)}"
+                streamlit_logger.exception(error_msg)
+                st.error(f"❌ {error_msg}")
+            
+            # Agent status
+            st.header("🤖 Available Agents")
+            agents = [
+                "📺 YouTube Agent",
+                "🌤️ Weather Agent", 
+                "🔍 Tavily Research",
+                "🔍 DuckDuckGo Research",
+                "📄 Report Writer",
+                "🎯 Orchestrator"
+            ]
+            for agent in agents:
+                st.write(f"✅ {agent}")
+            
+            # Job history
+            if st.session_state.job_history:
+                st.header("📋 Job History")
+                for i, job in enumerate(reversed(st.session_state.job_history[-5:]), 1):
+                    with st.expander(f"Job {len(st.session_state.job_history) - i + 1}"):
+                        st.write(f"**Query:** {job['query']}")
+                        st.write(f"**Time:** {job['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                        
+    except Exception as e:
+        error_msg = f"Error in sidebar configuration: {str(e)}"
+        streamlit_logger.exception(error_msg)
+        st.sidebar.error(f"❌ {error_msg}")
     
     # Main chat interface
-    st.header("💬 Chat Interface")
-    
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    try:
+        st.header("💬 Chat Interface")
+        streamlit_logger.debug("Rendering chat interface")
+        
+        # Display chat messages
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+                
+    except Exception as e:
+        error_msg = f"Error rendering chat interface: {str(e)}"
+        streamlit_logger.exception(error_msg)
+        st.error(f"❌ {error_msg}")
     
     # Chat input
     if prompt := st.chat_input("Enter your request (e.g., 'Research AI trends', 'Weather in New York', 'Analyze YouTube video: URL')"):
@@ -324,10 +394,11 @@ def main():
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Process request and display response
+        # Process request and display response with loading spinner
         with st.chat_message("assistant"):
-            # Run async function in Streamlit
-            asyncio.run(process_user_input(prompt))
+            with st.spinner("🤖 Processing your request... Please wait while agents work on your task."):
+                # Run async function in Streamlit
+                asyncio.run(process_user_input(prompt))
         
         # Add assistant response to chat history
         st.session_state.messages.append({
@@ -343,21 +414,25 @@ def main():
     with col1:
         st.subheader("Research & Reports")
         if st.button("🔍 Research AI trends in 2024"):
-            st.session_state.messages.append({"role": "user", "content": "Research AI trends in 2024"})
-            st.rerun()
+            with st.spinner("Adding query to chat..."):
+                st.session_state.messages.append({"role": "user", "content": "Research AI trends in 2024"})
+                st.rerun()
         
         if st.button("📊 Generate comprehensive report on climate change"):
-            st.session_state.messages.append({"role": "user", "content": "Generate comprehensive report on climate change"})
-            st.rerun()
+            with st.spinner("Adding query to chat..."):
+                st.session_state.messages.append({"role": "user", "content": "Generate comprehensive report on climate change"})
+                st.rerun()
     
     with col2:
         st.subheader("Weather & YouTube")
         if st.button("🌤️ Weather forecast for San Francisco"):
-            st.session_state.messages.append({"role": "user", "content": "Weather forecast for San Francisco"})
-            st.rerun()
+            with st.spinner("Adding query to chat..."):
+                st.session_state.messages.append({"role": "user", "content": "Weather forecast for San Francisco"})
+                st.rerun()
         
         if st.button("📺 Analyze YouTube video"):
-            st.session_state.messages.append({"role": "user", "content": "Analyze YouTube video: https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+            with st.spinner("Adding query to chat..."):
+                st.session_state.messages.append({"role": "user", "content": "Analyze YouTube video: https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
             st.rerun()
 
 

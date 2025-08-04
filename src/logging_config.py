@@ -108,7 +108,7 @@ class AgentLoggerAdapter(logging.LoggerAdapter):
         """Log tool function calls."""
         self.debug(f"Tool call: {tool_name}", 
                   extra={'event_type': 'tool_call', 'tool_name': tool_name, 
-                        'args': args, **kwargs})
+                        'tool_args': args, **kwargs})
 
 
 class LoggingManager:
@@ -197,7 +197,7 @@ class LoggingManager:
         # Clear any existing handlers
         root_logger.handlers.clear()
         
-        # Console handler (INFO level)
+        # Console handler (INFO level - clean output)
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(console_formatter)
@@ -206,16 +206,16 @@ class LoggingManager:
         # File handler (DEBUG level)
         log_file = self.logs_dir / f"pyai_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         file_handler = logging.handlers.RotatingFileHandler(
-            log_file, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8'
+            log_file, maxBytes=50*1024*1024, backupCount=3, encoding='utf-8'
         )
-        file_handler.setLevel(logging.DEBUG)
+        file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(file_formatter)
         root_logger.addHandler(file_handler)
         
         # Error file handler (ERROR level only)
         error_file = self.logs_dir / f"pyai_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         error_handler = logging.handlers.RotatingFileHandler(
-            error_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
+            error_file, maxBytes=25*1024*1024, backupCount=2, encoding='utf-8'
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(file_formatter)

@@ -30,6 +30,50 @@ class OrchestratorDeps:
         self.orchestrator_id = str(uuid.uuid4())
 
 
+def extract_youtube_url(text: str) -> str:
+    """Extract YouTube URL from text, supporting all common YouTube URL formats."""
+    import re
+    
+    # Comprehensive YouTube URL patterns
+    patterns = [
+        # Standard YouTube URLs (youtube.com/watch)
+        r'https?://(?:www\.)?youtube\.com/watch\?(?:[^&\s]*&)*v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)',
+        r'https?://(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)?',
+        
+        # Mobile YouTube URLs (m.youtube.com)
+        r'https?://m\.youtube\.com/watch\?(?:[^&\s]*&)*v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)',
+        r'https?://m\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)?',
+        
+        # YouTube Music URLs
+        r'https?://music\.youtube\.com/watch\?(?:[^&\s]*&)*v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)',
+        r'https?://music\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)?',
+        
+        # YouTube Shorts URLs
+        r'https?://(?:www\.)?youtube\.com/shorts/([a-zA-Z0-9_-]{11})(?:[^&\s]*)?',
+        
+        # Short URLs (youtu.be)
+        r'https?://youtu\.be/([a-zA-Z0-9_-]{11})(?:\?[^&\s]*)?',
+        
+        # Embed URLs
+        r'https?://(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]{11})(?:[^&\s]*)?',
+        
+        # YouTube TV URLs
+        r'https?://(?:www\.)?youtube\.com/tv#/watch/video/idle\?v=([a-zA-Z0-9_-]{11})',
+        
+        # Gaming YouTube URLs
+        r'https?://gaming\.youtube\.com/watch\?(?:[^&\s]*&)*v=([a-zA-Z0-9_-]{11})(?:[^&\s]*)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            video_id = match.group(1)
+            # Return a standardized YouTube URL
+            return f"https://www.youtube.com/watch?v={video_id}"
+    
+    return text  # fallback to original text
+
+
 def parse_job_request(user_input: str) -> JobRequest:
     """Parse user input into a structured job request."""
     user_input_lower = user_input.lower()
@@ -206,8 +250,8 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
         
         # Route based on job type
         if job_request.job_type == "youtube":
-            # Extract URL from query (simplified)
-            url = job_request.query
+            # Extract URL from query
+            url = extract_youtube_url(job_request.query)
             agents_used.append("YouTubeAgent")
             
             yield StreamingUpdate(

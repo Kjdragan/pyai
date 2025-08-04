@@ -26,34 +26,36 @@ def setup_logging():
     return logging.getLogger(__name__)
 
 
-def clean_logs_directory(logs_dir: Path, logger: logging.Logger):
-    """Clean the logs directory, keeping only recent logs if needed."""
+def clean_logs_directory(logger: logging.Logger):
+    """Clean ALL existing log files from the logs directory on startup."""
     try:
-        if logs_dir.exists():
-            # Count files before cleanup
-            file_count = len(list(logs_dir.glob('*')))
-            
-            if file_count > 0:
-                logger.info(f"Cleaning logs directory: {logs_dir}")
-                logger.info(f"Found {file_count} files to clean")
-                
-                # Remove all files in the logs directory
-                for file_path in logs_dir.glob('*'):
-                    if file_path.is_file():
-                        file_path.unlink()
-                        logger.debug(f"Removed log file: {file_path}")
-                    elif file_path.is_dir():
-                        shutil.rmtree(file_path)
-                        logger.debug(f"Removed log directory: {file_path}")
-                
-                logger.info(f"Successfully cleaned {file_count} items from logs directory")
-            else:
-                logger.info("Logs directory is already clean")
-        else:
-            # Create logs directory if it doesn't exist
+        logs_dir = Path(__file__).parent / "logs"
+        if not logs_dir.exists():
             logs_dir.mkdir(parents=True, exist_ok=True)
             logger.info(f"Created logs directory: {logs_dir}")
-            
+            return
+        
+        # Get ALL log files (including rotated ones with .1, .2, etc.)
+        files_to_clean = list(logs_dir.glob("*.log*"))
+        
+        if not files_to_clean:
+            logger.info("No existing log files to clean")
+            return
+        
+        logger.info(f"Cleaning ALL existing log files from: {logs_dir}")
+        logger.info(f"Found {len(files_to_clean)} log files to remove")
+        
+        cleaned_count = 0
+        for file_path in files_to_clean:
+            try:
+                file_path.unlink()
+                cleaned_count += 1
+                logger.debug(f"Removed: {file_path.name}")
+            except Exception as e:
+                logger.warning(f"Could not remove {file_path}: {str(e)}")
+        
+        logger.info(f"Successfully cleaned {cleaned_count} log files from logs directory")
+        
     except Exception as e:
         logger.error(f"Error cleaning logs directory: {str(e)}")
 
@@ -64,9 +66,10 @@ def kill_processes_on_port(port: int, logger: logging.Logger):
         killed_processes = []
         
         # Find processes using the port
-        for proc in psutil.process_iter(['pid', 'name', 'connections']):
+        for proc in psutil.process_iter(['pid', 'name']):
             try:
-                connections = proc.info['connections']
+                # Get connections directly from the process object
+                connections = proc.connections()
                 if connections:
                     for conn in connections:
                         if hasattr(conn, 'laddr') and conn.laddr and conn.laddr.port == port:
@@ -143,30 +146,43 @@ def kill_streamlit_processes(logger: logging.Logger):
 
 
 def cleanup_temp_files(logger: logging.Logger):
-    """Clean up temporary files and caches."""
+    """Clean up only specific temporary files that may interfere with startup."""
     try:
-        temp_patterns = [
-            "*.pyc",
-            "__pycache__",
-            "*.tmp",
-            "*.log",
-            ".pytest_cache"
-        ]
-        
         project_root = Path(__file__).parent.parent
         cleaned_count = 0
         
-        for pattern in temp_patterns:
-            for file_path in project_root.rglob(pattern):
-                try:
-                    if file_path.is_file():
-                        file_path.unlink()
-                        cleaned_count += 1
-                    elif file_path.is_dir():
-                        shutil.rmtree(file_path)
-                        cleaned_count += 1
-                except Exception as e:
-                    logger.debug(f"Could not remove {file_path}: {str(e)}")
+        # Only clean specific problematic temp files, not all Python cache
+        specific_cleanup_paths = [
+            project_root / ".pytest_cache",  # Test cache only
+            project_root / "src" / "*.tmp",  # Temp files in src only
+        ]
+        
+        # Clean specific directories/files only
+        for cleanup_path in specific_cleanup_paths:
+            if "*" in str(cleanup_path):
+                # Handle glob patterns
+                for file_path in cleanup_path.parent.glob(cleanup_path.name):
+                    try:
+                        if file_path.is_file():
+                            file_path.unlink()
+                            cleaned_count += 1
+                        elif file_path.is_dir():
+                            shutil.rmtree(file_path)
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"Could not remove {file_path}: {str(e)}")
+            else:
+                # Handle specific paths
+                if cleanup_path.exists():
+                    try:
+                        if cleanup_path.is_file():
+                            cleanup_path.unlink()
+                            cleaned_count += 1
+                        elif cleanup_path.is_dir():
+                            shutil.rmtree(cleanup_path)
+                            cleaned_count += 1
+                    except Exception as e:
+                        logger.debug(f"Could not remove {cleanup_path}: {str(e)}")
         
         if cleaned_count > 0:
             logger.info(f"Cleaned {cleaned_count} temporary files/directories")
@@ -189,7 +205,7 @@ def run_hygiene_tasks(logs_dir: str = None, port: int = 8501):
         logs_dir = Path(logs_dir)
     
     # Run cleanup tasks
-    clean_logs_directory(logs_dir, logger)
+    clean_logs_directory(logger)
     kill_processes_on_port(port, logger)
     kill_streamlit_processes(logger)
     cleanup_temp_files(logger)

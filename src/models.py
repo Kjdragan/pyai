@@ -4,7 +4,7 @@ All agent I/O is strictly typed via these models.
 """
 
 from pydantic import BaseModel, HttpUrl, Field
-from typing import List, Dict, Optional, Literal
+from typing import List, Dict, Optional, Literal, Any
 from datetime import datetime
 
 
@@ -12,10 +12,26 @@ class YouTubeTranscriptModel(BaseModel):
     """Model for YouTube transcript data."""
     url: HttpUrl
     transcript: str
-    metadata: Dict[str, str]
+    metadata: Dict[str, Any]  # Fixed: use Any instead of any
     title: Optional[str] = None
     duration: Optional[str] = None
     channel: Optional[str] = None
+
+
+class YouTubeMetadata(BaseModel):
+    """Proper YouTube transcript metadata model matching API response."""
+    video_id: str
+    language: str
+    language_code: str
+    is_generated: bool
+    transcript_length: int
+    segments_count: int
+    is_translatable: bool
+    available_languages: List[str]
+    translation_languages: List[Dict[str, str]]
+    duration_seconds: float
+    first_segment_start: float
+    last_segment_end: float
 
 
 class WeatherData(BaseModel):
