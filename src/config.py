@@ -19,15 +19,13 @@ class Config:
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
     OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
     
-    # Model Settings
-    DEFAULT_MODEL: str = os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
-    ORCHESTRATOR_MODEL: str = os.getenv("ORCHESTRATOR_MODEL", "gpt-4o-mini")
-    
-    # Individual Agent Model Settings
-    YOUTUBE_MODEL: str = os.getenv("YOUTUBE_MODEL", "gpt-4o-mini")
-    WEATHER_MODEL: str = os.getenv("WEATHER_MODEL", "gpt-4o-mini")
-    RESEARCH_MODEL: str = os.getenv("RESEARCH_MODEL", "gpt-4o-mini")
-    REPORT_MODEL: str = os.getenv("REPORT_MODEL", "gpt-4o-mini")
+    # Model configurations
+    DEFAULT_MODEL: str = os.getenv('DEFAULT_MODEL', 'gpt-4.1-mini')
+    ORCHESTRATOR_MODEL: str = os.getenv('ORCHESTRATOR_MODEL', 'gpt-4.1-mini')
+    RESEARCH_MODEL: str = os.getenv('RESEARCH_MODEL', 'gpt-4.1-mini')
+    WEATHER_MODEL: str = os.getenv('WEATHER_MODEL', 'gpt-4.1-mini')
+    YOUTUBE_MODEL: str = os.getenv('YOUTUBE_MODEL', 'gpt-4.1-mini')
+    REPORT_MODEL: str = os.getenv('REPORT_MODEL', 'gpt-4.1-mini')
     
     # Agent Settings
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))

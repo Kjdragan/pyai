@@ -333,7 +333,6 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
                 )
             else:
                 # Create dummy research data for report-only requests
-                from ..models import ResearchPipelineModel, ResearchItem
                 dummy_research = ResearchPipelineModel(
                     original_query=job_request.query,
                     sub_queries=[job_request.query],

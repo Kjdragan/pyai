@@ -10,9 +10,13 @@ import json
 from datetime import datetime
 
 # Import our agents and models
-from .agents import run_orchestrator_job
-from .models import StreamingUpdate, JobRequest
-from .config import config
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from agents import run_orchestrator_job
+from models import StreamingUpdate, JobRequest
+from config import config
 
 
 def initialize_session_state():

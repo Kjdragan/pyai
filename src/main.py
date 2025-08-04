@@ -11,6 +11,18 @@ from typing import Optional
 # Add src to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+# Run hygiene cleanup tasks at startup
+from hygiene import run_hygiene_tasks
+run_hygiene_tasks()
+
+# Initialize comprehensive logging system
+from logging_config import initialize_logging, get_logger
+logging_manager = initialize_logging(
+    logs_dir=os.path.join(os.path.dirname(__file__), "logs"),
+    enable_logfire=True
+)
+system_logger = get_logger("main")
+
 from config import config
 from agents import run_orchestrator_job
 from models import StreamingUpdate
@@ -18,18 +30,23 @@ from models import StreamingUpdate
 
 async def main_cli(query: Optional[str] = None):
     """Command-line interface for the multi-agent system."""
+    system_logger.info("Starting Pydantic-AI Multi-Agent System CLI")
+    
     print("🤖 Pydantic-AI Multi-Agent System")
     print("=" * 50)
     
     # Validate configuration
+    system_logger.debug("Validating configuration")
     missing_keys = config.validate_required_keys()
     if missing_keys:
+        system_logger.error(f"Missing required API keys: {missing_keys}")
         print(f"❌ Missing required API keys: {', '.join(missing_keys)}")
         print("Please set the following environment variables:")
         for key in missing_keys:
             print(f"  - {key}")
         return
     
+    system_logger.info("Configuration validation successful")
     print("✅ Configuration validated")
     print()
     
@@ -44,14 +61,17 @@ async def main_cli(query: Optional[str] = None):
         
         query = input("Enter your request: ").strip()
         if not query:
+            system_logger.info("No query provided, exiting CLI")
             print("No query provided. Exiting.")
             return
     
+    system_logger.info(f"Processing user query: {query}")
     print(f"Processing: {query}")
     print("-" * 50)
     
     try:
         # Process through orchestrator
+        system_logger.debug("Starting orchestrator job execution")
         async for update in run_orchestrator_job(query):
             timestamp = update.timestamp.strftime("%H:%M:%S")
             
@@ -120,12 +140,17 @@ async def main_cli(query: Optional[str] = None):
                         print("-" * 30)
                 
             elif update.update_type == "error":
+                system_logger.error(f"Agent error - {update.agent_name}: {update.message}")
                 print(f"❌ [{timestamp}] {update.agent_name}: {update.message}")
     
     except KeyboardInterrupt:
+        system_logger.info("CLI process interrupted by user")
         print("\n⏹️ Process interrupted by user")
     except Exception as e:
+        system_logger.exception(f"Unexpected error in CLI: {str(e)}")
         print(f"❌ Error: {str(e)}")
+    
+    system_logger.info("CLI session completed")
 
 
 def run_streamlit():
@@ -133,15 +158,21 @@ def run_streamlit():
     import subprocess
     import sys
     
+    system_logger.info(f"Launching Streamlit web interface on {config.STREAMLIT_HOST}:{config.STREAMLIT_PORT}")
     print("🚀 Launching Streamlit web interface...")
     
-    # Run streamlit app
-    subprocess.run([
-        sys.executable, "-m", "streamlit", "run", 
-        "src/streamlit_app.py",
-        "--server.port", str(config.STREAMLIT_PORT),
-        "--server.address", config.STREAMLIT_HOST
-    ])
+    try:
+        # Run streamlit app
+        subprocess.run([
+            sys.executable, "-m", "streamlit", "run", 
+            "src/streamlit_app.py",
+            "--server.port", str(config.STREAMLIT_PORT),
+            "--server.address", config.STREAMLIT_HOST
+        ])
+        system_logger.info("Streamlit process completed")
+    except Exception as e:
+        system_logger.exception(f"Error launching Streamlit: {str(e)}")
+        raise
 
 
 if __name__ == "__main__":

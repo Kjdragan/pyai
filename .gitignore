@@ -191,3 +191,9 @@ Thumbs.db
 .env.staging
 secrets.json
 api_keys.txt
+/home/kjdrag/lrepos/pyai/.env
+/home/kjdrag/lrepos/pyai/pyproject.toml
+
+# Logs directory
+src/logs/
+*.log
