@@ -162,9 +162,10 @@ async def generate_report_draft(
 ) -> str:
     """Generate initial report draft."""
     
-    # Create content-specific generation agent
+    # Create content-specific generation agent with instrumentation
     generation_agent = Agent(
         OpenAIModel(config.DEFAULT_MODEL),
+        instrument=True,  # Enable Pydantic AI tracing
         system_prompt=f"""
         You are an expert report writer. Generate a {style} report using the provided template.
         
@@ -191,7 +192,13 @@ async def generate_report_draft(
         Research Results:
         """
         for item in data.results[:10]:  # Limit to top 10 results
-            content_summary += f"\n- {item.title}: {item.snippet[:200]}..."
+            # Use full scraped content if available, otherwise fall back to snippet
+            content_to_use = item.scraped_content if (item.content_scraped and item.scraped_content) else item.snippet
+            # USE FULL CONTENT WITHOUT ANY TRUNCATION for maximum report quality
+            
+            # Add scraping status indicator
+            scraping_status = " [FULL CONTENT]" if item.content_scraped else " [SNIPPET ONLY]"
+            content_summary += f"\n- {item.title}{scraping_status}: {content_to_use}"
         
         title = data.original_query
         
@@ -224,6 +231,7 @@ async def refine_report(draft: str, style: str) -> str:
     
     refinement_agent = Agent(
         OpenAIModel(config.DEFAULT_MODEL),
+        instrument=True,  # Enable Pydantic AI tracing
         system_prompt=f"""
         You are an expert editor. Your job is to refine and improve the provided {style} report.
         
@@ -243,11 +251,12 @@ async def refine_report(draft: str, style: str) -> str:
     return result.data
 
 
-# Create Report Writer Agent
+# Create Report Writer Agent with instrumentation
 report_writer_agent = Agent(
     model=OpenAIModel(config.REPORT_MODEL),
     deps_type=ReportWriterDeps,
     output_type=ReportGenerationModel,
+    instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are a professional report writer agent. Your job is to:
     1. Ingest research data or YouTube transcript data

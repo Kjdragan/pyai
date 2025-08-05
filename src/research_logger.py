@@ -17,8 +17,10 @@ class ResearchDataLogger:
         self.log_dir.mkdir(exist_ok=True)
         
     class PydanticJSONEncoder(json.JSONEncoder):
-        """Custom JSON encoder that handles Pydantic types like HttpUrl."""
+        """Custom JSON encoder that handles Pydantic types like HttpUrl and datetime."""
         def default(self, obj: Any) -> Any:
+            if isinstance(obj, datetime):
+                return obj.isoformat()
             if isinstance(obj, HttpUrl):
                 return str(obj)
             if hasattr(obj, "model_dump"):
@@ -78,3 +80,41 @@ class ResearchDataLogger:
 # Example usage:
 # logger = ResearchDataLogger()
 # logger.log_research_state(research_pipeline_model, master_output_model)
+
+
+class MasterStateLogger:
+    """Logger for the centralized master state document."""
+    
+    def __init__(self, log_dir: str = "src/logs/state"):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(exist_ok=True)
+        
+    class PydanticJSONEncoder(json.JSONEncoder):
+        """Custom JSON encoder that handles Pydantic types like HttpUrl and datetime."""
+        def default(self, obj: Any) -> Any:
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, HttpUrl):
+                return str(obj)
+            if hasattr(obj, "model_dump"):
+                return obj.model_dump()
+            return super().default(obj)
+    
+    def log_master_state(self, master_output: MasterOutputModel, state_summary: dict = None) -> str:
+        """Log the complete master state document to a JSON file."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = self.log_dir / f"master_state_{master_output.orchestrator_id}_{timestamp}.json"
+        
+        # Create comprehensive log entry
+        log_entry = {
+            "timestamp": timestamp,
+            "master_state": master_output.model_dump(),
+            "state_summary": state_summary or {}
+        }
+        
+        # Write to file with custom encoder
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(log_entry, f, indent=2, ensure_ascii=False, cls=self.PydanticJSONEncoder)
+        
+        print(f"Master state logged to: {filename}")
+        return str(filename)

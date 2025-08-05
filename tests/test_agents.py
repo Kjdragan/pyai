@@ -13,7 +13,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, 
 from agents.youtube_agent import youtube_agent, process_youtube_request, extract_video_id
 from agents.weather_agent import weather_agent, process_weather_request
 from agents.research_tavily_agent import tavily_research_agent, process_tavily_research_request
-from agents.research_duckduckgo_agent import duckduckgo_research_agent, process_duckduckgo_research_request
+from agents.research_serper_agent import serper_research_agent, process_serper_research_request
 from agents.report_writer_agent import report_writer_agent, process_report_request
 from agents.orchestrator_agent import orchestrator_agent, parse_job_request, run_orchestrator_job
 
@@ -146,17 +146,17 @@ class TestResearchAgents:
         assert result.output.original_query is not None
         assert result.output.pipeline_type == "tavily"
     
-    async def test_duckduckgo_research_agent_with_test_model(self, test_model):
-        """Test DuckDuckGo research agent using TestModel."""
+    async def test_serper_research_agent_with_test_model(self, test_model):
+        """Test Serper research agent using TestModel."""
         with capture_run_messages() as messages:
-            with duckduckgo_research_agent.override(model=test_model):
-                result = await duckduckgo_research_agent.run("Research climate change")
+            with serper_research_agent.override(model=test_model):
+                result = await serper_research_agent.run("Research climate change")
         
         # Verify the agent was called and returned structured data
         assert len(messages) >= 1
         assert isinstance(result.output, ResearchPipelineModel)
         assert result.output.original_query is not None
-        assert result.output.pipeline_type == "duckduckgo"
+        assert result.output.pipeline_type == "serper"
     
     @patch('agents.research_tavily_agent.TavilyClient')
     @patch('agents.research_tavily_agent.expand_query_to_subquestions')
@@ -258,8 +258,8 @@ class TestOrchestratorAgent:
         assert any("research" in str(msg).lower() for msg in messages)
     
     @patch('agents.orchestrator_agent.process_tavily_research_request')
-    @patch('agents.orchestrator_agent.process_duckduckgo_research_request')
-    async def test_run_orchestrator_job_research(self, mock_ddg, mock_tavily):
+    @patch('agents.research_serper_agent.process_serper_research_request')
+    async def test_run_orchestrator_job_research(self, mock_serper, mock_tavily):
         """Test orchestrator job execution for research."""
         # Mock research responses
         mock_response = AgentResponse(
@@ -275,7 +275,7 @@ class TestOrchestratorAgent:
         )
         
         mock_tavily.return_value = mock_response
-        mock_ddg.return_value = mock_response
+        mock_serper.return_value = mock_response
         
         updates = []
         async for update in run_orchestrator_job("Research AI trends"):

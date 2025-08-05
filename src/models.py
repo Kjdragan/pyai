@@ -56,9 +56,14 @@ class ResearchItem(BaseModel):
     query_variant: str  # e.g. "Historical adoption of X"
     source_url: Optional[HttpUrl] = None
     title: str
-    snippet: str
+    snippet: str  # Original search result snippet (short)
     relevance_score: Optional[float] = None
     timestamp: Optional[datetime] = None
+    # Enhanced scraping metadata
+    content_scraped: bool = False  # Whether full content was successfully scraped
+    scraping_error: Optional[str] = None  # Error message if scraping failed
+    content_length: Optional[int] = None  # Length of scraped content
+    scraped_content: Optional[str] = None  # Full scraped content (untruncated, for report generation)
 
 
 class ResearchPipelineModel(BaseModel):
@@ -66,7 +71,7 @@ class ResearchPipelineModel(BaseModel):
     original_query: str
     sub_queries: List[str]  # 3 sub-questions (past, present, future)
     results: List[ResearchItem]
-    pipeline_type: Literal["tavily", "duckduckgo"]
+    pipeline_type: Literal["tavily", "serper", "combined_tavily_serper"]
     total_results: int
     processing_time: Optional[float] = None
 

@@ -13,22 +13,26 @@ from pydantic_ai.models.openai import OpenAIModel
 from models import (
     JobRequest, MasterOutputModel, StreamingUpdate, AgentResponse,
     YouTubeTranscriptModel, WeatherModel, ResearchPipelineModel, 
-    ReportGenerationModel
+    ReportGenerationModel, ResearchItem
 )
 from config import config
 from agents.youtube_agent import process_youtube_request
 from agents.weather_agent import process_weather_request
 from agents.research_tavily_agent import process_tavily_research_request
-from agents.research_duckduckgo_agent import process_duckduckgo_research_request
 from agents.report_writer_agent import process_report_request
-from research_logger import ResearchDataLogger
+from research_logger import ResearchDataLogger, MasterStateLogger
+from state_manager import MasterStateManager
 
 
 class OrchestratorDeps:
-    """Dependencies for Orchestrator Agent."""
-    def __init__(self):
+    """Dependencies for Orchestrator Agent with centralized state management."""
+    def __init__(self, state_manager: MasterStateManager = None):
         self.timeout = config.REQUEST_TIMEOUT
         self.orchestrator_id = str(uuid.uuid4())
+        self.start_time = asyncio.get_event_loop().time()
+        self.agents_used = []
+        self.errors = []
+        self.state_manager = state_manager  # Centralized state access
 
 
 def extract_youtube_url(text: str) -> str:
@@ -84,10 +88,10 @@ def parse_job_request(user_input: str) -> JobRequest:
         job_type = "youtube"
     elif any(keyword in user_input_lower for keyword in ["weather", "forecast", "temperature"]):
         job_type = "weather"
+    elif any(keyword in user_input_lower for keyword in ["research", "search", "find", "investigate", "latest", "developments", "trends"]):
+        job_type = "research"
     elif any(keyword in user_input_lower for keyword in ["report", "generate report", "write", "create", "comprehensive analysis", "summary of"]):
         job_type = "report"
-    elif any(keyword in user_input_lower for keyword in ["research", "search", "find", "investigate"]):
-        job_type = "research"
     else:
         # Default to research for general queries
         job_type = "research"
@@ -112,28 +116,29 @@ async def stream_update(update: StreamingUpdate) -> None:
     print(f"[{update.timestamp}] {update.agent_name}: {update.message}")
 
 
-# Create Orchestrator Agent
+# Create Orchestrator Agent with proper instrumentation
 orchestrator_agent = Agent(
     model=OpenAIModel(config.ORCHESTRATOR_MODEL),
     deps_type=OrchestratorDeps,
     output_type=MasterOutputModel,
+    instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are the Orchestrator Agent for a multi-agent system. Your responsibilities:
     
-    1. Parse user requests and determine which agents to dispatch to
-    2. Coordinate execution of specialized agents (YouTube, Weather, Research, Report Writer)
-    3. Stream progress updates to the user interface
-    4. Aggregate all results into a comprehensive MasterOutputModel
-    5. Handle errors gracefully and provide meaningful feedback
+    1. Parse user requests and determine which specialized agents to dispatch to
+    2. Coordinate execution using the available tools for each agent type
+    3. Aggregate all results into a comprehensive MasterOutputModel
+    4. Handle errors gracefully and provide meaningful feedback
     
-    Available agents:
-    - YouTubeAgent: Fetch video transcripts and metadata
-    - WeatherAgent: Get current weather and forecasts
-    - TavilyResearchAgent: Research using Tavily API
-    - DuckDuckGoResearchAgent: Research using DuckDuckGo
-    - ReportWriterAgent: Generate reports from research or YouTube data
+    Available tools (use these to dispatch to specialized agents):
+    - dispatch_to_youtube_agent: For video transcript and metadata requests
+    - dispatch_to_weather_agent: For weather and forecast requests  
+    - dispatch_to_research_agents: For research, search, and information gathering
+    - dispatch_to_report_writer: For generating reports from collected data
     
-    Always provide status updates and handle partial failures gracefully.
+    Always use the appropriate tools based on the user's request. For research requests about "latest developments", "trends", etc., use the research agents first, then generate a report.
+    
+    Return a complete MasterOutputModel with all relevant data populated.
     """,
     retries=config.MAX_RETRIES
 )
@@ -149,7 +154,34 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
             message=f"Dispatching YouTube transcript request for: {url}"
         ))
         
-        response = await process_youtube_request(url)
+        try:
+            # Use proper Pydantic AI agent instead of direct function call
+            from agents.youtube_agent import youtube_agent
+            youtube_result = await youtube_agent.run(
+                f"Process this YouTube URL: {url}",
+                usage=ctx.usage
+            )
+            # Convert to AgentResponse format for compatibility
+            # Extract the actual YouTubeTranscriptModel from AgentRunResult
+            if hasattr(youtube_result, 'data') and youtube_result.data:
+                result_data = youtube_result.data.model_dump() if hasattr(youtube_result.data, 'model_dump') else youtube_result.data
+            else:
+                result_data = youtube_result.model_dump() if hasattr(youtube_result, 'model_dump') else youtube_result
+            
+            response = AgentResponse(
+                agent_name="YouTubeAgent",
+                success=True,
+                data=result_data,
+                error=None
+            )
+        except Exception as e:
+            response = AgentResponse(
+                agent_name="YouTubeAgent",
+                success=False,
+                data={},
+                error=str(e)
+            )
+            ctx.deps.errors.append(f"YouTube: {str(e)}")
         
         if response.success:
             return f"YouTube agent completed successfully. Retrieved transcript with {len(response.data.get('transcript', ''))} characters."
@@ -170,7 +202,34 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
             message=f"Fetching weather data for: {location}"
         ))
         
-        response = await process_weather_request(location)
+        try:
+            # Use proper Pydantic AI agent instead of direct function call
+            from agents.weather_agent import weather_agent
+            weather_result = await weather_agent.run(
+                f"Get weather information for: {location}",
+                usage=ctx.usage
+            )
+            # Convert to AgentResponse format for compatibility
+            # Extract the actual WeatherModel from AgentRunResult
+            if hasattr(weather_result, 'data') and weather_result.data:
+                result_data = weather_result.data.model_dump() if hasattr(weather_result.data, 'model_dump') else weather_result.data
+            else:
+                result_data = weather_result.model_dump() if hasattr(weather_result, 'model_dump') else weather_result
+            
+            response = AgentResponse(
+                agent_name="WeatherAgent",
+                success=True,
+                data=result_data,
+                error=None
+            )
+        except Exception as e:
+            response = AgentResponse(
+                agent_name="WeatherAgent",
+                success=False,
+                data={},
+                error=str(e)
+            )
+            ctx.deps.errors.append(f"Weather: {str(e)}")
         
         if response.success:
             return f"Weather agent completed successfully. Retrieved current weather and forecast for {location}."
@@ -183,267 +242,257 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
 
 @orchestrator_agent.tool
 async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: str, pipeline: str = "both") -> str:
-    """Dispatch job to research agents (Tavily and/or DuckDuckGo)."""
+    """Dispatch job to research agents (Tavily and/or Serper)."""
     try:
-        await stream_update(StreamingUpdate(
-            update_type="status",
-            agent_name="Orchestrator",
-            message=f"Starting research for: {query}"
-        ))
+        ctx.deps.agents_used.append("ResearchAgents")
         
         results = []
         
         if pipeline in ["tavily", "both"]:
-            tavily_response = await process_tavily_research_request(query)
-            results.append(("Tavily", tavily_response))
+            try:
+                # Use proper Pydantic AI agent with explicit tool usage prompt
+                from agents.research_tavily_agent import tavily_research_agent, TavilyResearchDeps
+                
+                # Create proper dependencies for the Tavily agent
+                tavily_deps = TavilyResearchDeps()
+                
+                tavily_result = await tavily_research_agent.run(
+                    f"Use your perform_tavily_research tool to conduct comprehensive research on: {query}. "
+                    f"Please search for real web sources and return structured results with actual URLs and data.",
+                    deps=tavily_deps,
+                    usage=ctx.usage
+                )
+                # Convert to AgentResponse format for compatibility
+                # Extract the actual ResearchPipelineModel from AgentRunResult
+                if hasattr(tavily_result, 'data') and tavily_result.data:
+                    result_data = tavily_result.data.model_dump() if hasattr(tavily_result.data, 'model_dump') else tavily_result.data
+                else:
+                    result_data = tavily_result.model_dump() if hasattr(tavily_result, 'model_dump') else tavily_result
+                
+                tavily_response = AgentResponse(
+                    agent_name="TavilyResearchAgent",
+                    success=True,
+                    data=result_data,
+                    error=None
+                )
+                results.append(("Tavily", tavily_response))
+            except Exception as e:
+                tavily_response = AgentResponse(
+                    agent_name="TavilyResearchAgent",
+                    success=False,
+                    data={},
+                    error=str(e)
+                )
+                results.append(("Tavily", tavily_response))
+                ctx.deps.errors.append(f"Tavily: {str(e)}")
         
-        if pipeline in ["duckduckgo", "both"]:
-            ddg_response = await process_duckduckgo_research_request(query)
-            results.append(("DuckDuckGo", ddg_response))
+        if pipeline in ["serper", "both"]:
+            try:
+                # Use proper Pydantic AI agent with explicit tool usage prompt
+                from agents.research_serper_agent import serper_research_agent, SerperResearchDeps
+                
+                # Create proper dependencies for the Serper agent
+                serper_deps = SerperResearchDeps()
+                
+                serper_result = await serper_research_agent.run(
+                    f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
+                    f"Please search for real web sources and return structured results with actual URLs and data.",
+                    deps=serper_deps,
+                    usage=ctx.usage
+                )
+                # Convert to AgentResponse format for compatibility
+                # Extract the actual ResearchPipelineModel from AgentRunResult
+                if hasattr(serper_result, 'data') and serper_result.data:
+                    result_data = serper_result.data.model_dump() if hasattr(serper_result.data, 'model_dump') else serper_result.data
+                else:
+                    result_data = serper_result.model_dump() if hasattr(serper_result, 'model_dump') else serper_result
+                
+                serper_response = AgentResponse(
+                    agent_name="SerperResearchAgent",
+                    success=True,
+                    data=result_data,
+                    error=None
+                )
+                results.append(("Serper", serper_response))
+            except Exception as e:
+                serper_response = AgentResponse(
+                    agent_name="SerperResearchAgent",
+                    success=False,
+                    data={},
+                    error=str(e)
+                )
+                results.append(("Serper", serper_response))
+                ctx.deps.errors.append(f"Serper: {str(e)}")
         
         success_count = sum(1 for _, response in results if response.success)
         total_results = sum(response.data.get('total_results', 0) for _, response in results if response.success)
         
+        # Aggregate and combine ALL successful research results
+        all_research_results = []
+        combined_sub_queries = []
+        primary_query = query
+        
+        for name, response in results:
+            if response.success:
+                research_model = ResearchPipelineModel(**response.data)
+                all_research_results.extend(research_model.results)
+                combined_sub_queries.extend(research_model.sub_queries)
+                primary_query = research_model.original_query  # Use last successful query
+                
+                # Store individual pipeline data in centralized state
+                if ctx.deps.state_manager:
+                    ctx.deps.state_manager.update_research_data(name, research_model)
+        
+        # Create combined research model with ALL results from ALL pipelines
+        if all_research_results:
+            combined_research = ResearchPipelineModel(
+                original_query=primary_query,
+                sub_queries=list(set(combined_sub_queries)),  # Remove duplicates
+                results=all_research_results,
+                pipeline_type="combined_tavily_serper",
+                total_results=len(all_research_results),
+                processing_time=0.0
+            )
+            
+            # Store the combined research data as the primary research result
+            if ctx.deps.state_manager:
+                ctx.deps.state_manager.update_research_data("Combined", combined_research)
+            else:
+                # Fallback to old logging if state manager not available
+                logger = ResearchDataLogger()
+                logger.log_research_state(combined_research)
+        
         return f"Research completed. {success_count}/{len(results)} pipelines successful. Total results: {total_results}"
         
     except Exception as e:
+        ctx.deps.errors.append(str(e))
         return f"Error dispatching to research agents: {str(e)}"
 
 
 @orchestrator_agent.tool
-async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], data_type: str, style: str = "summary") -> str:
+async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: str, style: str = "summary") -> str:
     """Dispatch job to Report Writer agent."""
     try:
-        await stream_update(StreamingUpdate(
-            update_type="status",
-            agent_name="Orchestrator",
-            message=f"Generating {style} report from {data_type} data"
-        ))
+        ctx.deps.agents_used.append("ReportWriterAgent")
         
-        # This would use actual data from previous agent results
-        # For now, return a placeholder response
-        return f"Report writer would generate a {style} report from {data_type} data."
+        # Get research data from centralized state, or create dummy data if none available
+        research_data = None
+        if ctx.deps.state_manager:
+            research_data = ctx.deps.state_manager.get_research_data()
+        
+        if not research_data:
+            # Create dummy research data for report-only requests
+            research_data = ResearchPipelineModel(
+                original_query=query,
+                sub_queries=[query],
+                results=[ResearchItem(
+                    query_variant=query,
+                    title="General Information",
+                    snippet=f"Information about {query}",
+                    relevance_score=1.0
+                )],
+                pipeline_type="tavily",
+                total_results=1
+            )
+        
+        try:
+            # Use proper Pydantic AI agent instead of direct function call
+            from agents.report_writer_agent import report_writer_agent
+            report_result = await report_writer_agent.run(
+                f"Generate a {style} report based on this research data: {research_data.model_dump_json()}",
+                usage=ctx.usage
+            )
+            # Convert to AgentResponse format for compatibility
+            # Extract the actual ReportGenerationModel from AgentRunResult
+            if hasattr(report_result, 'data') and report_result.data:
+                result_data = report_result.data.model_dump() if hasattr(report_result.data, 'model_dump') else report_result.data
+            else:
+                result_data = report_result.model_dump() if hasattr(report_result, 'model_dump') else report_result
+            
+            report_response = AgentResponse(
+                agent_name="ReportWriterAgent",
+                success=True,
+                data=result_data,
+                error=None
+            )
+        except Exception as e:
+            report_response = AgentResponse(
+                agent_name="ReportWriterAgent",
+                success=False,
+                data={},
+                error=str(e)
+            )
+            ctx.deps.errors.append(f"Report Writer: {str(e)}")
+        
+        if report_response.success:
+            report_model = ReportGenerationModel(**report_response.data)
+            # Store in centralized state for access by other agents
+            if ctx.deps.state_manager:
+                ctx.deps.state_manager.update_report_data("ReportWriterAgent", report_model)
+            else:
+                # Fallback to old logging if state manager not available
+                logger = ResearchDataLogger()
+                logger.log_report_state(report_model)
+            return f"Report generated successfully: {len(report_response.data.get('final', ''))} characters"
+        else:
+            ctx.deps.errors.append(report_response.error)
+            return f"Error generating report: {report_response.error}"
         
     except Exception as e:
+        ctx.deps.errors.append(str(e))
         return f"Error dispatching to Report Writer agent: {str(e)}"
 
 
-async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerator[StreamingUpdate, None]:
-    """Process a job request through the orchestrator with streaming updates."""
-    start_time = asyncio.get_event_loop().time()
-    orchestrator_id = str(uuid.uuid4())
-    agents_used = []
-    errors = []
-    
-    # Initialize master output
-    master_output = MasterOutputModel(
-        job_request=job_request,
-        orchestrator_id=orchestrator_id,
-        agents_used=agents_used
-    )
-    
+async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdate, None]:
+    """Main entry point for running orchestrator jobs using proper Pydantic AI agent execution."""
     try:
+        # Parse user input into job request
+        job_request = parse_job_request(user_input)
+        
         yield StreamingUpdate(
             update_type="status",
             agent_name="Orchestrator",
             message=f"Starting job: {job_request.job_type} - {job_request.query}"
         )
         
-        # Route based on job type
-        if job_request.job_type == "youtube":
-            # Extract URL from query
-            url = extract_youtube_url(job_request.query)
-            agents_used.append("YouTubeAgent")
-            
-            yield StreamingUpdate(
-                update_type="status",
-                agent_name="Orchestrator",
-                message="Dispatching to YouTube Agent..."
-            )
-            
-            response = await process_youtube_request(url)
-            if response.success:
-                youtube_model = YouTubeTranscriptModel(**response.data)
-                master_output.youtube_data = youtube_model
-                
-                # Log YouTube data state
-                logger = ResearchDataLogger()
-                logger.log_youtube_state(youtube_model, master_output)
-                
-                yield StreamingUpdate(
-                    update_type="partial_result",
-                    agent_name="YouTubeAgent",
-                    message=f"YouTube transcript retrieved for {url}",
-                    data=response.data
-                )
-            else:
-                errors.append(response.error)
-                yield StreamingUpdate(
-                    update_type="error",
-                    agent_name="YouTubeAgent",
-                    message=f"Failed: {response.error}"
-                )
+        # Initialize centralized state manager
+        state_manager = MasterStateManager(
+            orchestrator_id=str(uuid.uuid4()),
+            job_request=job_request
+        )
         
-        elif job_request.job_type == "weather":
-            # Extract location from query
-            location = job_request.query.replace("weather", "").replace("forecast", "").strip()
-            agents_used.append("WeatherAgent")
-            
-            yield StreamingUpdate(
-                update_type="status",
-                agent_name="Orchestrator",
-                message=f"Fetching weather for {location}..."
-            )
-            
-            response = await process_weather_request(location)
-            if response.success:
-                weather_model = WeatherModel(**response.data)
-                master_output.weather_data = weather_model
-                
-                # Log weather data state
-                logger = ResearchDataLogger()
-                logger.log_weather_state(weather_model, master_output)
-                
-                yield StreamingUpdate(
-                    update_type="partial_result",
-                    agent_name="WeatherAgent",
-                    message=f"Weather data retrieved for {location}",
-                    data=response.data
-                )
-            else:
-                errors.append(response.error)
-                yield StreamingUpdate(
-                    update_type="error",
-                    agent_name="WeatherAgent",
-                    message=f"Failed: {response.error}"
-                )
+        # Create dependencies with state manager
+        deps = OrchestratorDeps(state_manager=state_manager)
         
-        elif job_request.job_type == "research":
-            # Run both research pipelines
-            agents_used.extend(["TavilyResearchAgent", "DuckDuckGoResearchAgent"])
-            
-            yield StreamingUpdate(
-                update_type="status",
-                agent_name="Orchestrator",
-                message="Running parallel research pipelines..."
-            )
-            
-            # Run research pipelines in parallel
-            tavily_task = process_tavily_research_request(job_request.query)
-            ddg_task = process_duckduckgo_research_request(job_request.query)
-            
-            tavily_response, ddg_response = await asyncio.gather(
-                tavily_task, ddg_task, return_exceptions=True
-            )
-            
-            # Process Tavily results
-            if isinstance(tavily_response, AgentResponse) and tavily_response.success:
-                research_model = ResearchPipelineModel(**tavily_response.data)
-                master_output.research_data = research_model
-                
-                # Log research data state
-                logger = ResearchDataLogger()
-                logger.log_research_state(research_model, master_output)
-                
-                yield StreamingUpdate(
-                    update_type="partial_result",
-                    agent_name="TavilyResearchAgent",
-                    message="Tavily research completed",
-                    data=tavily_response.data
-                )
-            else:
-                error_msg = tavily_response.error if isinstance(tavily_response, AgentResponse) else str(tavily_response)
-                errors.append(f"Tavily: {error_msg}")
-                yield StreamingUpdate(
-                    update_type="error",
-                    agent_name="TavilyResearchAgent",
-                    message=f"Failed: {error_msg}"
-                )
-            
-            # Process DuckDuckGo results (as backup if Tavily failed)
-            if isinstance(ddg_response, AgentResponse) and ddg_response.success and not master_output.research_data:
-                research_model = ResearchPipelineModel(**ddg_response.data)
-                master_output.research_data = research_model
-                
-                # Log research data state
-                logger = ResearchDataLogger()
-                logger.log_research_state(research_model, master_output)
-                
-                yield StreamingUpdate(
-                    update_type="partial_result",
-                    agent_name="DuckDuckGoResearchAgent",
-                    message="DuckDuckGo research completed",
-                    data=ddg_response.data
-                )
+        # Run the actual Pydantic AI orchestrator agent
+        result = await orchestrator_agent.run(
+            job_request.query,
+            deps=deps
+        )
         
-        # Generate report if requested or if we have data
-        if (job_request.job_type == "report" or 
-            master_output.research_data or 
-            master_output.youtube_data):
-            
-            agents_used.append("ReportWriterAgent")
-            
-            yield StreamingUpdate(
-                update_type="status",
-                agent_name="Orchestrator",
-                message=f"Generating {job_request.report_style} report..."
-            )
-            
-            # Determine data source for report
-            if master_output.research_data:
-                report_response = await process_report_request(
-                    master_output.research_data, 
-                    job_request.report_style
-                )
-            elif master_output.youtube_data:
-                report_response = await process_report_request(
-                    master_output.youtube_data, 
-                    job_request.report_style
-                )
-            else:
-                # Create dummy research data for report-only requests
-                dummy_research = ResearchPipelineModel(
-                    original_query=job_request.query,
-                    sub_queries=[job_request.query],
-                    results=[ResearchItem(
-                        query_variant=job_request.query,
-                        title="General Information",
-                        snippet=f"Information about {job_request.query}",
-                        relevance_score=1.0
-                    )],
-                    pipeline_type="tavily",
-                    total_results=1
-                )
-                report_response = await process_report_request(dummy_research, job_request.report_style)
-            
-            if report_response.success:
-                report_model = ReportGenerationModel(**report_response.data)
-                master_output.report_data = report_model
-                
-                # Log report data state
-                logger = ResearchDataLogger()
-                logger.log_report_state(report_model, master_output)
-                
-                yield StreamingUpdate(
-                    update_type="partial_result",
-                    agent_name="ReportWriterAgent",
-                    message="Report generated successfully",
-                    data=report_response.data
-                )
-            else:
-                errors.append(report_response.error)
-                yield StreamingUpdate(
-                    update_type="error",
-                    agent_name="ReportWriterAgent",
-                    message=f"Failed: {report_response.error}"
-                )
+        # Update final state in the centralized state manager
+        processing_time = asyncio.get_event_loop().time() - deps.start_time
+        state_manager.set_processing_time(processing_time)
         
-        # Finalize master output
-        master_output.agents_used = agents_used
-        master_output.errors = errors
-        master_output.success = len(errors) == 0
-        master_output.total_processing_time = asyncio.get_event_loop().time() - start_time
+        # Add any remaining errors from deps
+        for error in deps.errors:
+            state_manager.add_error("Orchestrator", error)
+            
+        # Get the complete master state document
+        master_output = state_manager.get_master_state()
         
+        # Update with orchestrator-specific data
+        master_output.agents_used.extend(deps.agents_used)
+        master_output.success = len(deps.errors) == 0 and master_output.success
+        
+        # Log the complete master state document
+        master_logger = MasterStateLogger()
+        master_logger.log_master_state(
+            master_output, 
+            state_summary=state_manager.get_state_summary()
+        )
+        
+        # Stream the final result
         yield StreamingUpdate(
             update_type="final_result",
             agent_name="Orchestrator",
@@ -451,24 +500,6 @@ async def process_orchestrator_request(job_request: JobRequest) -> AsyncGenerato
             data=master_output.model_dump()
         )
         
-    except Exception as e:
-        yield StreamingUpdate(
-            update_type="error",
-            agent_name="Orchestrator",
-            message=f"Orchestrator error: {str(e)}"
-        )
-
-
-async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdate, None]:
-    """Main entry point for running orchestrator jobs."""
-    try:
-        # Parse user input into job request
-        job_request = parse_job_request(user_input)
-        
-        # Process through orchestrator with streaming
-        async for update in process_orchestrator_request(job_request):
-            yield update
-            
     except Exception as e:
         yield StreamingUpdate(
             update_type="error",

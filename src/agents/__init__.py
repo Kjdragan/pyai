@@ -5,7 +5,7 @@ Agent registry and initialization for the multi-agent system.
 from .youtube_agent import youtube_agent, process_youtube_request
 from .weather_agent import weather_agent, process_weather_request
 from .research_tavily_agent import tavily_research_agent, process_tavily_research_request
-from .research_duckduckgo_agent import duckduckgo_research_agent, process_duckduckgo_research_request
+from .research_serper_agent import serper_research_agent, process_serper_research_request
 from .report_writer_agent import report_writer_agent, process_report_request
 from .orchestrator_agent import orchestrator_agent, run_orchestrator_job
 
@@ -14,7 +14,7 @@ __all__ = [
     "youtube_agent",
     "weather_agent", 
     "tavily_research_agent",
-    "duckduckgo_research_agent",
+    "serper_research_agent",
     "report_writer_agent",
     "orchestrator_agent",
     
@@ -22,7 +22,7 @@ __all__ = [
     "process_youtube_request",
     "process_weather_request",
     "process_tavily_research_request", 
-    "process_duckduckgo_research_request",
+    "process_serper_research_request",
     "process_report_request",
     "run_orchestrator_job"
 ]
@@ -45,10 +45,10 @@ AGENT_REGISTRY = {
         "processor": process_tavily_research_request,
         "description": "Research using Tavily API with query expansion"
     },
-    "research_duckduckgo": {
-        "agent": duckduckgo_research_agent,
-        "processor": process_duckduckgo_research_request,
-        "description": "Research using DuckDuckGo with query expansion"
+    "research_serper": {
+        "agent": serper_research_agent,
+        "processor": process_serper_research_request,
+        "description": "Research using Google Search via Serper API with URL scraping"
     },
     "report_writer": {
         "agent": report_writer_agent,

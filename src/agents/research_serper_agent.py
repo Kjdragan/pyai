@@ -1,49 +1,29 @@
 """
-Research Pipeline 1: Tavily-based research agent.
-Expands queries into 3 sub-questions and performs parallel searches.
+Serper-based Research Agent for comprehensive search capabilities.
+Uses Google Search via Serper API for high-quality research results.
 """
 
 import asyncio
 import httpx
 from typing import List, Optional
-from tavily import AsyncTavilyClient
+from datetime import datetime
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
-from datetime import datetime
-import time
 from bs4 import BeautifulSoup
 
 from models import ResearchPipelineModel, ResearchItem, AgentResponse
 from config import config
-from agents.query_expansion import expand_query_to_subquestions
 
 
-class TavilyResearchDeps:
-    """Dependencies for Tavily Research Agent."""
+class SerperResearchDeps:
+    """Dependencies for Serper Research Agent."""
+    
     def __init__(self):
-        self.api_key = config.TAVILY_API_KEY
-        self.timeout = config.RESEARCH_TIMEOUT
+        self.api_key = config.SERPER_API_KEY
         self.max_results = config.MAX_RESEARCH_RESULTS
         self.current_date = datetime.now().strftime("%Y-%m-%d")
-        self.research_results = []  # Store results for agent access
-        self.sub_questions = []     # Store sub-questions for agent access
-        self._client = None  # Reusable async client
-        self._last_request_time = 0  # Rate limiting
-        self._min_request_interval = 1.0 / config.TAVILY_RATE_LIMIT_RPS  # Configurable RPS
-    
-    async def get_client(self) -> AsyncTavilyClient:
-        """Get or create reusable async Tavily client."""
-        if self._client is None:
-            self._client = AsyncTavilyClient(api_key=self.api_key)
-        return self._client
-    
-    async def rate_limit(self):
-        """Implement rate limiting to stay within 5 RPS limit."""
-        current_time = time.time()
-        time_since_last = current_time - self._last_request_time
-        if time_since_last < self._min_request_interval:
-            await asyncio.sleep(self._min_request_interval - time_since_last)
-        self._last_request_time = time.time()
+        self.research_results: List[ResearchItem] = []
+        self.sub_questions: List[str] = []
 
 
 async def expand_query_to_subquestions(query: str) -> List[str]:
@@ -173,162 +153,146 @@ async def scrape_url_content(url: str, max_chars: int = 2000) -> str:
         return ""
 
 
-async def search_tavily(
-    client: AsyncTavilyClient, 
-    query: str, 
-    max_results: int = 5,
-    time_range: str = "month",
-    include_domains: Optional[List[str]] = None,
-    exclude_domains: Optional[List[str]] = None
-) -> List[ResearchItem]:
-    """Perform Tavily search and return structured results following best practices."""
+async def search_serper(query: str, api_key: str, max_results: int = 10) -> List[ResearchItem]:
+    """Perform search using Serper API with URL content scraping."""
+    
+    if not api_key:
+        return []
+    
+    url = "https://google.serper.dev/search"
+    
+    headers = {
+        "X-API-KEY": api_key,
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "q": query,
+        "num": max_results,
+        "hl": "en",
+        "gl": "us"
+    }
+    
     try:
-        # Ensure query is under 400 characters (Tavily limit)
-        if len(query) > 400:
-            query = query[:397] + "..."
-        
-        # Build search parameters with optional domain filtering
-        search_params = {
-            "query": query,
-            "search_depth": config.TAVILY_SEARCH_DEPTH,  # Configurable search depth
-            "max_results": min(max_results, 10),  # Reasonable limit
-            "include_raw_content": True,  # Better precision with advanced depth
-            "include_answer": True,  # Get LLM-generated answer
-            "time_range": time_range  # Configurable time range
-        }
-        
-        # Add domain filtering if specified
-        if include_domains:
-            search_params["include_domains"] = include_domains
-        if exclude_domains:
-            search_params["exclude_domains"] = exclude_domains
-        
-        # Perform async search with timeout
-        try:
-            response = await asyncio.wait_for(
-                client.search(**search_params),
-                timeout=30  # 30 second timeout per search
-            )
-        except asyncio.TimeoutError:
-            print(f"Tavily search timeout for query: {query[:50]}...")
-            return []
-        except Exception as api_error:
-            print(f"Tavily API error for query '{query[:50]}...': {str(api_error)}")
-            return []
-        
-        results = []
-        for item in response.get("results", []):
-            # Filter by relevance score (best practice)
-            score = item.get("score", 0)
-            if score < config.TAVILY_MIN_SCORE:  # Skip low-relevance results
-                continue
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
             
-            # Get basic snippet from Tavily
-            basic_snippet = item.get("content", "")
-            url = item.get("url", "")
+            data = response.json()
+            results = []
             
-            # Prepare scraping variables
-            content_scraped = False
-            scraping_error = None
-            full_scraped_content = None
-            scraped_content_length = 0
-            
-            print(f"🔍 DEBUG: Checking scraping for {url} with score {score}")
-            if url and score > 0.5:  # Lower threshold to scrape more results
-                print(f"🚀 DEBUG: Attempting to scrape {url}")
-                scraped_content = await scrape_url_content(url, max_chars=10000)  # Much higher limit for full content
-                if scraped_content:
-                    full_scraped_content = scraped_content
-                    content_scraped = True
-                    scraped_content_length = len(scraped_content)
-                    print(f"✅ DEBUG: Successfully scraped {scraped_content_length} chars from {url}, content_scraped={content_scraped}")
-                    print(f"🔍 DEBUG: Scraped content preview (first 200 chars): {scraped_content[:200]}...")
-                    print(f"🔍 DEBUG: Full scraped content will be saved to scraped_content field")
+            # Process organic results with URL scraping
+            for item in data.get("organic", [])[:max_results]:
+                basic_snippet = item.get("snippet", "")
+                source_url = item.get("link", "")
+                
+                # Prepare scraping variables
+                content_scraped = False
+                scraping_error = None
+                full_scraped_content = None
+                scraped_content_length = 0
+                
+                print(f"🔍 SERPER DEBUG: Checking scraping for {source_url}")
+                # Attempt to scrape content for high-relevance results
+                if source_url:
+                    print(f"🚀 SERPER DEBUG: Attempting to scrape {source_url}")
+                    scraped_content = await scrape_url_content(source_url, max_chars=10000)  # Much higher limit for full content
+                    if scraped_content:
+                        full_scraped_content = scraped_content
+                        content_scraped = True
+                        scraped_content_length = len(scraped_content)
+                        print(f"✅ SERPER DEBUG: Successfully scraped {scraped_content_length} chars from {source_url}, content_scraped={content_scraped}")
+                    else:
+                        scraping_error = "Failed to scrape content"
+                        print(f"❌ SERPER DEBUG: Failed to scrape content from {source_url}, scraping_error={scraping_error}")
                 else:
-                    scraping_error = "Failed to scrape content"
-                    print(f"❌ DEBUG: Failed to scrape content from {url}, scraping_error={scraping_error}")
-            else:
-                print(f"⏭️  DEBUG: Skipping scraping for {url} (score {score} <= 0.5 or no URL)")
+                    scraping_error = "No URL provided"
+                    print(f"⏭️ SERPER DEBUG: No URL to scrape")
+                
+                result = ResearchItem(
+                    query_variant=query,
+                    source_url=source_url,
+                    title=item.get("title", ""),
+                    snippet=basic_snippet,  # Keep original snippet separate
+                    relevance_score=0.9,  # Serper provides high-quality results
+                    timestamp=datetime.now(),
+                    content_scraped=content_scraped,
+                    scraping_error=scraping_error,
+                    content_length=scraped_content_length,  # Length of scraped content only
+                    scraped_content=full_scraped_content  # Full scraped content for report generation
+                )
+                results.append(result)
             
-            research_item = ResearchItem(
-                query_variant=query,
-                source_url=url,
-                title=item.get("title", ""),
-                snippet=basic_snippet,  # Keep original snippet separate
-                relevance_score=score,
-                timestamp=datetime.now(),
-                content_scraped=content_scraped,
-                scraping_error=scraping_error,
-                content_length=scraped_content_length,  # Length of scraped content only
-                scraped_content=full_scraped_content  # Full scraped content for report generation
-            )
-            results.append(research_item)
-        
-        # Sort by relevance score (best practice)
-        results.sort(key=lambda x: x.relevance_score or 0, reverse=True)
-        
-        return results
-        
+            return results
+            
     except Exception as e:
-        print(f"Tavily search error for query '{query[:50]}...': {str(e)}")
-        # Return empty results on error
+        print(f"Serper search error for '{query}': {str(e)}")
         return []
 
 
 def clean_and_format_results(results: List[ResearchItem], original_query: str) -> List[ResearchItem]:
-    """Clean and format research results using universal template."""
-    cleaned_results = []
+    """Clean and format search results while preserving scraping metadata."""
     
-    for item in results:
-        # Basic cleaning - remove excessive whitespace from snippet only (keep it short)
-        cleaned_snippet = " ".join(item.snippet.split())
-        if len(cleaned_snippet) > 500:
-            cleaned_snippet = cleaned_snippet[:497] + "..."
-        
-        # Clean scraped content but DON'T truncate it - keep it full for report generation
-        cleaned_scraped_content = None
-        if item.scraped_content:
-            # Just clean whitespace, but preserve full length
-            cleaned_scraped_content = " ".join(item.scraped_content.split())
-        
-        # Create cleaned item - PRESERVE ALL SCRAPING METADATA AND FULL CONTENT
-        cleaned_item = ResearchItem(
-            query_variant=item.query_variant,
-            source_url=item.source_url,
-            title=item.title.strip(),
-            snippet=cleaned_snippet,  # Short snippet for display
-            relevance_score=item.relevance_score,
-            timestamp=item.timestamp,
-            # CRITICAL: Preserve scraping metadata
-            content_scraped=item.content_scraped,
-            scraping_error=item.scraping_error,
-            content_length=item.content_length,
-            scraped_content=cleaned_scraped_content  # Full content for report generation (NOT truncated)
-        )
-        cleaned_results.append(cleaned_item)
+    # Remove duplicates by URL
+    seen_urls = set()
+    cleaned = []
     
-    return cleaned_results
+    for result in results:
+        if result.source_url not in seen_urls and result.source_url:
+            seen_urls.add(result.source_url)
+            
+            # Basic cleaning - remove excessive whitespace from snippet only (keep it short)
+            cleaned_snippet = " ".join(result.snippet.split())
+            if len(cleaned_snippet) > 500:
+                cleaned_snippet = cleaned_snippet[:497] + "..."
+            
+            # Clean scraped content but DON'T truncate it - keep it full for report generation
+            cleaned_scraped_content = None
+            if result.scraped_content:
+                # Just clean whitespace, but preserve full length
+                cleaned_scraped_content = " ".join(result.scraped_content.split())
+            
+            # Create cleaned item - PRESERVE ALL SCRAPING METADATA AND FULL CONTENT
+            cleaned_item = ResearchItem(
+                query_variant=result.query_variant,
+                source_url=result.source_url,
+                title=result.title.strip(),
+                snippet=cleaned_snippet,  # Short snippet for display
+                relevance_score=result.relevance_score,
+                timestamp=result.timestamp,
+                # CRITICAL: Preserve scraping metadata
+                content_scraped=result.content_scraped,
+                scraping_error=result.scraping_error,
+                content_length=result.content_length,
+                scraped_content=cleaned_scraped_content  # Full content for report generation (NOT truncated)
+            )
+            cleaned.append(cleaned_item)
+    
+    # Sort by relevance score (descending)
+    cleaned.sort(key=lambda x: x.relevance_score or 0, reverse=True)
+    
+    return cleaned[:config.MAX_RESEARCH_RESULTS]
 
 
-# Create Tavily Research Agent with instrumentation
-tavily_research_agent = Agent(
+# Create Serper Research Agent with instrumentation
+serper_research_agent = Agent(
     model=OpenAIModel(config.RESEARCH_MODEL),
-    deps_type=TavilyResearchDeps,
+    deps_type=SerperResearchDeps,
     output_type=ResearchPipelineModel,
     instrument=True,  # Enable Pydantic AI tracing
     system_prompt=f"""
-    You are a research coordination agent that processes raw Tavily API data into structured output.
+    You are a research coordination agent that processes Google search results via Serper API.
     
-    Current date: {datetime.now().strftime("%Y-%m-%d")}
+    Today's date is: {datetime.now().strftime("%Y-%m-%d")}
     
     When asked to research something:
-    1. Call your perform_tavily_research tool with the exact user query
-    2. The tool returns raw data with enhanced content from URL scraping
+    1. Call your perform_serper_research tool with the exact user query
+    2. The tool returns raw data: {{"original_query": str, "sub_queries": list, "raw_results": list, "processing_time": float}}
     3. Convert this raw data into a ResearchPipelineModel with these exact fields:
        - original_query: use the original_query from tool
        - sub_queries: use the sub_queries from tool  
        - results: convert each item in raw_results to ResearchItem format
-       - pipeline_type: set to "tavily"
+       - pipeline_type: set to "serper"
        - total_results: count of items in raw_results
        - processing_time: use processing_time from tool
     
@@ -374,8 +338,8 @@ tavily_research_agent = Agent(
 )
 
 
-@tavily_research_agent.tool
-async def expand_query_intelligently(ctx: RunContext[TavilyResearchDeps], query: str) -> List[str]:
+@serper_research_agent.tool
+async def expand_query_intelligently(ctx: RunContext[SerperResearchDeps], query: str) -> List[str]:
     """Tool to intelligently expand a query into 3 diverse sub-questions using LLM analysis.
     
     First analyzes the query type and context, then generates appropriate sub-questions
@@ -386,65 +350,52 @@ async def expand_query_intelligently(ctx: RunContext[TavilyResearchDeps], query:
     return await expand_query_to_subquestions(query)
 
 
-@tavily_research_agent.tool
-async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: str) -> dict:
-    """Tool to perform comprehensive Tavily research and return raw API data."""
+@serper_research_agent.tool
+async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: str) -> dict:
+    """Tool to perform comprehensive Serper research and return raw API data."""
     try:
-        print(f"🔍 TAVILY TOOL DEBUG: Starting research for query: {query}")
+        print(f"🔍 SERPER TOOL DEBUG: Starting research for query: {query}")
         
         if not ctx.deps.api_key:
-            print(f"❌ TAVILY TOOL DEBUG: API key not configured")
+            print(f"❌ SERPER TOOL DEBUG: API key not configured")
             return {
-                "error": "Tavily API key not configured",
+                "error": "Serper API key not configured",
                 "original_query": query,
                 "sub_queries": [],
                 "raw_results": [],
                 "processing_time": 0.0
             }
         
-        print(f"✅ TAVILY TOOL DEBUG: API key configured")
+        print(f"✅ SERPER TOOL DEBUG: API key configured, current date: {ctx.deps.current_date}")
         
         # Expand query into sub-questions
         sub_questions = await expand_query_to_subquestions(query)
-        print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+        print(f"📝 SERPER TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
         
-        # Get reusable async client
-        client = await ctx.deps.get_client()
-        print(f"🔗 TAVILY TOOL DEBUG: Client created successfully")
+        # Perform parallel searches with rate limiting
+        search_tasks = [
+            search_serper(question, ctx.deps.api_key, max(1, ctx.deps.max_results // len(sub_questions)))
+            for question in sub_questions
+        ]
         
-        # Perform parallel searches with rate limiting and proper error handling
-        search_tasks = []
-        for question in sub_questions:
-            # Apply rate limiting before each request
-            await ctx.deps.rate_limit()
-            search_tasks.append(
-                search_tavily(
-                    client, 
-                    question, 
-                    max(1, ctx.deps.max_results // len(sub_questions)),
-                    time_range=config.TAVILY_TIME_RANGE,  # Configurable time range
-                    exclude_domains=["pinterest.com", "quora.com"]  # Filter low-quality domains
-                )
-            )
-        
-        # Use return_exceptions=True to handle failures gracefully (best practice)
+        # Execute searches in parallel
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        print(f"🔍 TAVILY TOOL DEBUG: Received {len(search_results)} search results")
+        print(f"🔍 SERPER TOOL DEBUG: Received {len(search_results)} search results")
         
         # Combine results
         all_results = []
         for i, results in enumerate(search_results):
             if isinstance(results, list):
-                print(f"📊 TAVILY TOOL DEBUG: Search {i+1} returned {len(results)} results")
+                print(f"📊 SERPER TOOL DEBUG: Search {i+1} returned {len(results)} results")
                 all_results.extend(results)
             else:
-                print(f"⚠️ TAVILY TOOL DEBUG: Search {i+1} returned non-list: {type(results)}")
+                print(f"⚠️ SERPER TOOL DEBUG: Search {i+1} returned non-list: {type(results)}")
         
-        print(f"🔢 TAVILY TOOL DEBUG: Total combined results: {len(all_results)}")
+        print(f"🔢 SERPER TOOL DEBUG: Total combined results: {len(all_results)}")
         
         # Clean and format results
         cleaned_results = clean_and_format_results(all_results, query)
-        print(f"✨ TAVILY TOOL DEBUG: After cleaning: {len(cleaned_results)} results")
+        print(f"✨ SERPER TOOL DEBUG: After cleaning: {len(cleaned_results)} results")
         
         # Store results in context for agent access
         ctx.deps.research_results = cleaned_results
@@ -457,16 +408,15 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
             "raw_results": [result.model_dump() for result in cleaned_results],
             "processing_time": 0.0  # Will be calculated at agent level
         }
-        print(f"🎯 TAVILY TOOL DEBUG: Returning dict with {len(result_dict['raw_results'])} raw results")
+        print(f"🎯 SERPER TOOL DEBUG: Returning dict with {len(result_dict['raw_results'])} raw results")
         return result_dict
                
     except Exception as e:
-        print(f"❌ TAVILY TOOL DEBUG: Exception caught: {str(e)}")
-        print(f"❌ TAVILY TOOL DEBUG: Exception type: {type(e)}")
+        print(f"❌ SERPER TOOL DEBUG: Exception caught: {str(e)}")
         import traceback
-        print(f"❌ TAVILY TOOL DEBUG: Traceback: {traceback.format_exc()}")
+        print(f"❌ SERPER TOOL DEBUG: Traceback: {traceback.format_exc()}")
         return {
-            "error": f"Error performing Tavily research: {str(e)}",
+            "error": f"Error performing Serper research: {str(e)}",
             "original_query": query,
             "sub_queries": [],
             "raw_results": [],
@@ -474,65 +424,31 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         }
 
 
-async def process_tavily_research_request(query: str) -> AgentResponse:
-    """Process Tavily research request."""
+async def process_serper_research_request(query: str) -> AgentResponse:
+    """Process Serper research request."""
     start_time = asyncio.get_event_loop().time()
     
     try:
-        deps = TavilyResearchDeps()
-        
-        if not deps.api_key:
-            return AgentResponse(
-                agent_name="TavilyResearchAgent",
-                success=False,
-                error="Tavily API key not configured"
-            )
-        
-        # Expand query into sub-questions
-        sub_questions = await expand_query_to_subquestions(query)
-        
-        # Initialize Tavily client
-        client = TavilyClient(api_key=deps.api_key)
-        
-        # Perform parallel searches
-        search_tasks = [
-            search_tavily(client, question, deps.max_results // 3)
-            for question in sub_questions
-        ]
-        
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        
-        # Combine and clean results
-        all_results = []
-        for results in search_results:
-            if isinstance(results, list):
-                all_results.extend(results)
-        
-        cleaned_results = clean_and_format_results(all_results, query)
-        
-        # Create result model
-        result = ResearchPipelineModel(
-            original_query=query,
-            sub_queries=sub_questions,
-            results=cleaned_results,
-            pipeline_type="tavily",
-            total_results=len(cleaned_results),
-            processing_time=asyncio.get_event_loop().time() - start_time
+        deps = SerperResearchDeps()
+        result = await serper_research_agent.run(
+            f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
+            f"Please search for real web sources and return structured results with actual URLs and data.",
+            deps=deps
         )
         
         processing_time = asyncio.get_event_loop().time() - start_time
         
         return AgentResponse(
-            agent_name="TavilyResearchAgent",
+            agent_name="SerperResearchAgent",
             success=True,
-            data=result.model_dump(),
+            data=result.data.model_dump() if result.data else {},
             processing_time=processing_time
         )
         
     except Exception as e:
         processing_time = asyncio.get_event_loop().time() - start_time
         return AgentResponse(
-            agent_name="TavilyResearchAgent",
+            agent_name="SerperResearchAgent",
             success=False,
             error=str(e),
             processing_time=processing_time

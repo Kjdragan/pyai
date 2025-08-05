@@ -15,15 +15,16 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from hygiene import run_hygiene_tasks
 run_hygiene_tasks()
 
-# Initialize comprehensive logging system
+# Load configuration first (this loads .env file)
+from config import config
+
+# Initialize comprehensive logging system AFTER config loading
 from logging_config import initialize_logging, get_logger
 logging_manager = initialize_logging(
     logs_dir=os.path.join(os.path.dirname(__file__), "logs"),
     enable_logfire=True
 )
 system_logger = get_logger("main")
-
-from config import config
 from agents import run_orchestrator_job
 from models import StreamingUpdate
 
@@ -48,6 +49,12 @@ async def main_cli(query: Optional[str] = None):
     
     system_logger.info("Configuration validation successful")
     print("✅ Configuration validated")
+    
+    # Display trace access information
+    if logging_manager.enable_logfire:
+        dashboard_url = logging_manager._get_logfire_dashboard_url()
+        if dashboard_url:
+            print(f"🎯 Live traces available at: {dashboard_url}")
     print()
     
     # Get query from user if not provided

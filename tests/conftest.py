@@ -85,22 +85,27 @@ def mock_tavily_api():
 
 
 @pytest.fixture
-def mock_duckduckgo_api():
-    """Mock DuckDuckGo API responses."""
+def mock_serper_api():
+    """Mock Serper API responses."""
     return {
-        "Abstract": "Test abstract content",
-        "AbstractURL": "https://example.com/abstract",
-        "AbstractSource": "Test Source",
-        "RelatedTopics": [
+        "organic": [
             {
-                "Text": "Related topic 1 - Additional information",
-                "FirstURL": "https://example.com/related1"
+                "title": "Test Search Result 1",
+                "link": "https://example.com/result1",
+                "snippet": "This is a test search result snippet with relevant information."
             },
             {
-                "Text": "Related topic 2 - More details",
-                "FirstURL": "https://example.com/related2"
+                "title": "Test Search Result 2", 
+                "link": "https://example.com/result2",
+                "snippet": "Another test search result with different content and details."
             }
-        ]
+        ],
+        "searchParameters": {
+            "q": "test query",
+            "num": 10,
+            "hl": "en",
+            "gl": "us"
+        }
     }
 
 

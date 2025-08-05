@@ -68,11 +68,12 @@ async def fetch_youtube_transcript(video_id: str, languages: List[str] = None) -
         raise ValueError(f"No transcript available for video {video_id}: {str(e)}")
 
 
-# Create YouTube Agent
+# Create YouTube Agent with instrumentation
 youtube_agent = Agent(
     model=OpenAIModel(config.YOUTUBE_MODEL),
     output_type=YouTubeTranscriptModel,
     deps_type=YouTubeAgentDeps,
+    instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are a YouTube transcript analysis agent. You receive pre-fetched transcript data and create structured output.
     
@@ -151,13 +152,44 @@ async def process_youtube_request(url: str) -> AgentResponse:
             
             agent_logger.info(f"✅ Transcript fetched - Length: {len(transcript)} chars, Language: {metadata.get('language')}")
             
-            # Create structured YouTube transcript model directly
+            # Fetch video metadata using yt-dlp (more reliable than pytube)
+            title = None
+            channel = None
+            duration = None
+            
+            try:
+                agent_logger.info("🎬 Fetching video metadata using yt-dlp...")
+                import yt_dlp
+                
+                ydl_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    
+                    title = info.get('title')
+                    channel = info.get('uploader')
+                    duration_seconds = info.get('duration')  # Duration in seconds
+                    duration = str(duration_seconds) if duration_seconds is not None else None
+                
+                agent_logger.info(f"✅ Video metadata fetched - Title: {title[:50] if title else 'N/A'}..., Channel: {channel}, Duration: {duration}s")
+                
+            except Exception as e:
+                agent_logger.warning(f"⚠️ Failed to fetch video metadata: {str(e)}")
+                # Continue without metadata - don't fail the entire request
+            
+            # Create structured YouTube transcript model with metadata
             agent_logger.info("📋 Creating structured transcript model...")
             
             youtube_model = YouTubeTranscriptModel(
                 url=url,
                 transcript=transcript,
-                metadata=metadata
+                metadata=metadata,
+                title=title,
+                channel=channel,
+                duration=duration
             )
             
             response_data = {
@@ -165,6 +197,9 @@ async def process_youtube_request(url: str) -> AgentResponse:
                 "url": url,
                 "transcript": transcript,
                 "metadata": metadata,
+                "title": title,
+                "channel": channel,
+                "duration": duration,
                 "structured_model": youtube_model.model_dump()
             }
             

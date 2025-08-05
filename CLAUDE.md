@@ -72,7 +72,7 @@ This is a **Pydantic-AI multi-agent system** with a hub-and-spoke architecture c
 2. **Specialized Agents** - Each handles one domain:
    - **YouTubeAgent**: Extracts transcripts using youtube-transcript-api
    - **WeatherAgent**: OpenWeather API integration
-   - **ResearchTavilyAgent** / **ResearchDuckDuckGoAgent**: Parallel research pipelines
+   - **ResearchTavilyAgent** / **ResearchSerperAgent**: Parallel research pipelines with URL scraping
    - **ReportWriterAgent**: Generates reports from research/YouTube data
 
 3. **Strict Type Safety** - All agent I/O uses Pydantic models in `models.py`:

@@ -8,6 +8,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -132,10 +133,16 @@ class LoggingManager:
     def _configure_logfire(self):
         """Configure Logfire for Pydantic AI observability."""
         try:
-            # Configure Logfire with enhanced settings
+            # Get project name from environment
+            project_name = os.getenv('LOGFIRE_PROJECT_NAME', 'pyai')
+            
+            # Configure Logfire with enhanced settings - explicitly pass token
+            logfire_token = os.getenv('LOGFIRE_TOKEN')
             logfire.configure(
                 send_to_logfire=True,
-                console=False  # We'll handle console logging separately
+                token=logfire_token,  # Explicitly pass the token
+                service_name='pyai-multi-agent',  # Set proper service name
+                service_version='1.0.0'
             )
             
             # Instrument Pydantic AI with detailed event logging
@@ -152,7 +159,9 @@ class LoggingManager:
             print("✅ Logfire instrumentation enabled")
             if dashboard_url:
                 print(f"🔗 Logfire Dashboard: {dashboard_url}")
-                print(f"   Click to view real-time traces and logs")
+                print(f"   View real-time traces, spans, and logs for debugging")
+                print(f"   Service: pyai-multi-agent | Project: {project_name}")
+                print("📊 All Pydantic AI agents, tools, and API calls are fully traced")
             
         except Exception as e:
             print(f"⚠️  Warning: Could not configure Logfire: {e}")
@@ -165,7 +174,7 @@ class LoggingManager:
             import os
             
             # Try to get project name from environment or use default
-            project_name = os.getenv('LOGFIRE_PROJECT_NAME', 'pyai-debug')
+            project_name = os.getenv('LOGFIRE_PROJECT_NAME', 'pyai')
             
             # Construct dashboard URL
             # Logfire uses format: https://logfire-us.pydantic.dev/{org}/{project}
@@ -212,10 +221,12 @@ class LoggingManager:
         file_handler.setFormatter(file_formatter)
         root_logger.addHandler(file_handler)
         
-        # Error file handler (ERROR level only)
-        error_file = self.logs_dir / f"pyai_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        # Error file handler (ERROR level only) - only create if there are actual errors
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        hostname = socket.gethostname()
+        error_file = self.logs_dir / f"pyai-error_{hostname}_{timestamp}.log"
         error_handler = logging.handlers.RotatingFileHandler(
-            error_file, maxBytes=25*1024*1024, backupCount=2, encoding='utf-8'
+            error_file, maxBytes=25*1024*1024, backupCount=2, encoding='utf-8', delay=True
         )
         error_handler.setLevel(logging.ERROR)
         error_handler.setFormatter(file_formatter)
@@ -271,7 +282,19 @@ class LoggingManager:
         if self.enable_logfire:
             dashboard_url = self._get_logfire_dashboard_url()
             if dashboard_url:
-                agent_logger.info(f"🔗 View live traces: {dashboard_url}")
+                agent_logger.info(f"🔗 View agent traces: {dashboard_url}")
+                
+                # Also try to get current trace ID for more specific link
+                try:
+                    import opentelemetry.trace as trace
+                    current_span = trace.get_current_span()
+                    if current_span and current_span.get_span_context().trace_id:
+                        trace_id = format(current_span.get_span_context().trace_id, '032x')
+                        trace_url = f"{dashboard_url}?q=trace_id%3D%27{trace_id}%27"
+                        agent_logger.info(f"🎯 Direct trace link: {trace_url}")
+                except Exception:
+                    # If we can't get trace ID, just show dashboard
+                    pass
         
         try:
             yield agent_logger

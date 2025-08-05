@@ -82,11 +82,12 @@ def parse_weather_data(weather_json: dict) -> WeatherData:
     )
 
 
-# Create Weather Agent
+# Create Weather Agent with instrumentation
 weather_agent = Agent(
     model=OpenAIModel(config.WEATHER_MODEL),
     deps_type=WeatherAgentDeps,
     output_type=WeatherModel,
+    instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are a weather information agent. Your job is to:
     1. Fetch current weather conditions for specified locations

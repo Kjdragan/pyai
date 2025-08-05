@@ -13,7 +13,7 @@ from pydantic_ai.models.test import TestModel
 from agents.orchestrator_agent import run_orchestrator_job, parse_job_request
 from agents import (
     process_youtube_request, process_weather_request,
-    process_tavily_research_request, process_duckduckgo_research_request,
+    process_tavily_research_request, process_serper_research_request,
     process_report_request
 )
 from models import (
@@ -27,9 +27,9 @@ class TestEndToEndWorkflows:
     """Test complete end-to-end workflows."""
     
     @patch('agents.orchestrator_agent.process_tavily_research_request')
-    @patch('agents.orchestrator_agent.process_duckduckgo_research_request')
+    @patch('agents.research_serper_agent.process_serper_research_request')
     @patch('agents.orchestrator_agent.process_report_request')
-    async def test_research_to_report_workflow(self, mock_report, mock_ddg, mock_tavily):
+    async def test_research_to_report_workflow(self, mock_report, mock_serper, mock_tavily):
         """Test complete research-to-report workflow."""
         # Mock research pipeline responses
         research_data = {
@@ -56,8 +56,8 @@ class TestEndToEndWorkflows:
             processing_time=2.5
         )
         
-        mock_ddg.return_value = AgentResponse(
-            agent_name="DuckDuckGoResearchAgent", 
+        mock_serper.return_value = AgentResponse(
+            agent_name="SerperResearchAgent", 
             success=True,
             data=research_data,
             processing_time=2.0
@@ -218,8 +218,8 @@ class TestErrorHandlingIntegration:
     """Test error handling in integrated workflows."""
     
     @patch('agents.orchestrator_agent.process_tavily_research_request')
-    @patch('agents.orchestrator_agent.process_duckduckgo_research_request')
-    async def test_research_pipeline_fallback(self, mock_ddg, mock_tavily):
+    @patch('agents.research_serper_agent.process_serper_research_request')
+    async def test_research_pipeline_fallback(self, mock_serper, mock_tavily):
         """Test fallback between research pipelines when one fails."""
         # Mock Tavily failure
         from models import AgentResponse
@@ -230,18 +230,18 @@ class TestErrorHandlingIntegration:
             processing_time=0.5
         )
         
-        # Mock DuckDuckGo success
+        # Mock Serper success
         research_data = {
             "original_query": "test query",
             "sub_queries": ["q1", "q2", "q3"],
             "results": [],
-            "pipeline_type": "duckduckgo",
+            "pipeline_type": "serper",
             "total_results": 0,
             "processing_time": 2.0
         }
         
-        mock_ddg.return_value = AgentResponse(
-            agent_name="DuckDuckGoResearchAgent",
+        mock_serper.return_value = AgentResponse(
+            agent_name="SerperResearchAgent",
             success=True,
             data=research_data,
             processing_time=2.0
@@ -263,17 +263,17 @@ class TestErrorHandlingIntegration:
         # Verify fallback behavior
         assert len(error_updates) > 0  # Should have error from Tavily
         assert final_result is not None
-        assert "research_data" in final_result  # Should have DuckDuckGo results
+        assert "research_data" in final_result  # Should have Serper results
         
         # Both agents should have been called
         mock_tavily.assert_called_once()
-        mock_ddg.assert_called_once()
+        mock_serper.assert_called_once()
     
     async def test_complete_workflow_failure(self):
         """Test handling when all agents fail."""
         # This test simulates a complete system failure
         with patch('agents.orchestrator_agent.process_tavily_research_request') as mock_tavily:
-            with patch('agents.orchestrator_agent.process_duckduckgo_research_request') as mock_ddg:
+            with patch('agents.research_serper_agent.process_serper_research_request') as mock_serper:
                 # Mock both research pipelines failing
                 from models import AgentResponse
                 
@@ -284,8 +284,8 @@ class TestErrorHandlingIntegration:
                     processing_time=0.1
                 )
                 
-                mock_ddg.return_value = AgentResponse(
-                    agent_name="DuckDuckGoResearchAgent",
+                mock_serper.return_value = AgentResponse(
+                    agent_name="SerperResearchAgent",
                     success=False,
                     error="Service unavailable",
                     processing_time=0.1

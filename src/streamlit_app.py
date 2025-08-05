@@ -167,7 +167,11 @@ def display_weather_results(weather_data: Dict[str, Any]):
             with st.container():
                 col1, col2, col3 = st.columns([2, 1, 2])
                 with col1:
-                    date = datetime.fromisoformat(day['timestamp']).strftime("%Y-%m-%d")
+                    # Handle both string and datetime timestamps
+                    if isinstance(day['timestamp'], str):
+                        date = datetime.fromisoformat(day['timestamp']).strftime("%Y-%m-%d")
+                    else:
+                        date = day['timestamp'].strftime("%Y-%m-%d")
                     st.write(f"**{date}**")
                 with col2:
                     st.write(f"{day['temp']}°")
@@ -186,7 +190,10 @@ def display_research_results(research_data: Dict[str, Any]):
         st.metric("Total Results", research_data.get('total_results', 0))
     with col3:
         processing_time = research_data.get('processing_time', 0)
-        st.metric("Processing Time", f"{processing_time:.2f}s")
+        if processing_time is not None:
+            st.metric("Processing Time", f"{processing_time:.2f}s")
+        else:
+            st.metric("Processing Time", "N/A")
     
     st.write(f"**Original Query:** {research_data.get('original_query', 'N/A')}")
     
@@ -202,14 +209,37 @@ def display_research_results(research_data: Dict[str, Any]):
     if results:
         st.subheader("Research Findings")
         
-        for i, result in enumerate(results[:10], 1):  # Show top 10
+        for i, result in enumerate(results[:15], 1):  # Show top 15 to include both pipelines
             with st.expander(f"{i}. {result.get('title', 'Untitled')}"):
                 st.write(f"**Query:** {result.get('query_variant', 'N/A')}")
-                st.write(f"**Snippet:** {result.get('snippet', 'N/A')}")
+                
+                # Enhanced content display
+                snippet = result.get('snippet', 'N/A')
+                if len(snippet) > 500:
+                    st.write(f"**Content Preview:** {snippet[:500]}...")
+                    with st.expander("View Full Content"):
+                        st.write(snippet)
+                else:
+                    st.write(f"**Content:** {snippet}")
+                
+                # Source and metadata
                 if result.get('source_url'):
                     st.write(f"**Source:** {result['source_url']}")
                 if result.get('relevance_score'):
                     st.write(f"**Relevance:** {result['relevance_score']:.2f}")
+                
+                # Scraping status indicators
+                if result.get('content_scraped'):
+                    st.success(f"✅ Content scraped ({result.get('content_length', 0)} chars)")
+                elif result.get('scraping_error'):
+                    if "403" in str(result.get('scraping_error', '')):
+                        st.warning("🚫 Content blocked by website")
+                    elif "Not implemented" in str(result.get('scraping_error', '')):
+                        st.info("ℹ️ Serper result (no scraping)")
+                    else:
+                        st.error(f"❌ Scraping failed: {result.get('scraping_error')}")
+                else:
+                    st.info("📄 Basic snippet only")
 
 
 def display_report_results(report_data: Dict[str, Any]):
@@ -222,8 +252,11 @@ def display_report_results(report_data: Dict[str, Any]):
     with col2:
         st.metric("Word Count", report_data.get('word_count', 0))
     with col3:
-        generation_time = report_data.get('generation_time', 0)
-        st.metric("Generation Time", f"{generation_time:.2f}s")
+        generation_time = report_data.get('generation_time')
+        if generation_time is not None:
+            st.metric("Generation Time", f"{generation_time:.2f}s")
+        else:
+            st.metric("Generation Time", "N/A")
     
     st.write(f"**Source Type:** {report_data.get('source_type', 'Unknown').title()}")
     
@@ -287,7 +320,7 @@ async def process_user_input(user_input: str):
             
             # Add to job history
             st.session_state.job_history.append({
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now().isoformat(),
                 "query": user_input,
                 "result": final_result
             })
@@ -350,7 +383,7 @@ def main():
                 "📺 YouTube Agent",
                 "🌤️ Weather Agent", 
                 "🔍 Tavily Research",
-                "🔍 DuckDuckGo Research",
+                "🔍 Serper Research",
                 "📄 Report Writer",
                 "🎯 Orchestrator"
             ]
@@ -363,7 +396,12 @@ def main():
                 for i, job in enumerate(reversed(st.session_state.job_history[-5:]), 1):
                     with st.expander(f"Job {len(st.session_state.job_history) - i + 1}"):
                         st.write(f"**Query:** {job['query']}")
-                        st.write(f"**Time:** {job['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                        # Handle both string and datetime timestamps
+                        if isinstance(job['timestamp'], str):
+                            timestamp = datetime.fromisoformat(job['timestamp'])
+                            st.write(f"**Time:** {timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                        else:
+                            st.write(f"**Time:** {job['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
                         
     except Exception as e:
         error_msg = f"Error in sidebar configuration: {str(e)}"

@@ -27,7 +27,7 @@ def setup_logging():
 
 
 def clean_logs_directory(logger: logging.Logger):
-    """Clean ALL existing log files from the logs directory on startup."""
+    """Clean ALL existing log files and state files from the logs directory on startup."""
     try:
         logs_dir = Path(__file__).parent / "logs"
         if not logs_dir.exists():
@@ -38,12 +38,18 @@ def clean_logs_directory(logger: logging.Logger):
         # Get ALL log files (including rotated ones with .1, .2, etc.)
         files_to_clean = list(logs_dir.glob("*.log*"))
         
+        # Also clean the state directory
+        state_dir = logs_dir / "state"
+        if state_dir.exists():
+            state_files = list(state_dir.glob("*.json"))
+            files_to_clean.extend(state_files)
+        
         if not files_to_clean:
             logger.info("No existing log files to clean")
             return
         
         logger.info(f"Cleaning ALL existing log files from: {logs_dir}")
-        logger.info(f"Found {len(files_to_clean)} log files to remove")
+        logger.info(f"Found {len(files_to_clean)} files to remove (logs + state)")
         
         cleaned_count = 0
         for file_path in files_to_clean:
@@ -54,7 +60,7 @@ def clean_logs_directory(logger: logging.Logger):
             except Exception as e:
                 logger.warning(f"Could not remove {file_path}: {str(e)}")
         
-        logger.info(f"Successfully cleaned {cleaned_count} log files from logs directory")
+        logger.info(f"Successfully cleaned {cleaned_count} files from logs directory")
         
     except Exception as e:
         logger.error(f"Error cleaning logs directory: {str(e)}")
