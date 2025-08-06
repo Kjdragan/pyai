@@ -10,9 +10,9 @@ from datetime import datetime
 
 class YouTubeTranscriptModel(BaseModel):
     """Model for YouTube transcript data."""
-    url: HttpUrl
+    url: str  # Simplified from HttpUrl to avoid validation issues
     transcript: str
-    metadata: Dict[str, Any]  # Fixed: use Any instead of any
+    metadata: Dict[str, Any]
     title: Optional[str] = None
     duration: Optional[str] = None
     channel: Optional[str] = None
@@ -85,6 +85,41 @@ class ReportGenerationModel(BaseModel):
     source_type: Literal["research", "youtube"]
     word_count: Optional[int] = None
     generation_time: Optional[float] = None
+
+class UniversalReportData(BaseModel):
+    """Universal data container for report generation - can handle any combination of data sources."""
+    query: str  # Original user query
+    
+    # Optional data sources
+    youtube_data: Optional[YouTubeTranscriptModel] = None
+    research_data: Optional[ResearchPipelineModel] = None
+    weather_data: Optional[WeatherModel] = None
+    
+    def has_data(self) -> bool:
+        """Check if any data sources are available."""
+        return any([self.youtube_data, self.research_data, self.weather_data])
+    
+    def get_data_types(self) -> List[str]:
+        """Get list of available data types."""
+        types = []
+        if self.youtube_data: types.append("youtube")
+        if self.research_data: types.append("research") 
+        if self.weather_data: types.append("weather")
+        return types
+    
+    def get_primary_content(self) -> str:
+        """Get the main content for analysis."""
+        if self.youtube_data and self.youtube_data.transcript:
+            return f"YouTube Video: {self.youtube_data.title or 'Unknown Title'}\n\nTranscript:\n{self.youtube_data.transcript}"
+        elif self.research_data and self.research_data.results:
+            content = f"Research Results for: {self.research_data.original_query}\n\n"
+            for result in self.research_data.results[:5]:  # Top 5 results
+                content += f"• {result.title}: {result.snippet}\n"
+            return content
+        elif self.weather_data:
+            return f"Weather data for query: {self.query}"
+        else:
+            return f"General information about: {self.query}"
 
 
 class JobRequest(BaseModel):

@@ -16,7 +16,6 @@ import json
 import traceback
 from contextlib import contextmanager
 
-import logfire
 from pydantic_ai.agent import InstrumentationSettings
 
 
@@ -115,79 +114,18 @@ class AgentLoggerAdapter(logging.LoggerAdapter):
 class LoggingManager:
     """Central logging manager for the Pydantic AI system."""
     
-    def __init__(self, logs_dir: str = None, enable_logfire: bool = True):
+    def __init__(self, logs_dir: str = None):
         self.logs_dir = Path(logs_dir) if logs_dir else Path(__file__).parent / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
-        self.enable_logfire = enable_logfire
         self.loggers: Dict[str, logging.Logger] = {}
         self.agent_adapters: Dict[str, AgentLoggerAdapter] = {}
         
-        # Configure Logfire if enabled
-        if self.enable_logfire:
-            self._configure_logfire()
         
         # Setup base logging configuration
         self._setup_base_logging()
     
-    def _configure_logfire(self):
-        """Configure Logfire for Pydantic AI observability."""
-        try:
-            # Get project name from environment
-            project_name = os.getenv('LOGFIRE_PROJECT_NAME', 'pyai')
-            
-            # Configure Logfire with enhanced settings - explicitly pass token
-            logfire_token = os.getenv('LOGFIRE_TOKEN')
-            logfire.configure(
-                send_to_logfire=True,
-                token=logfire_token,  # Explicitly pass the token
-                service_name='pyai-multi-agent',  # Set proper service name
-                service_version='1.0.0'
-            )
-            
-            # Instrument Pydantic AI with detailed event logging
-            logfire.instrument_pydantic_ai(
-                event_mode='logs',  # Use separate log events for better granularity
-            )
-            
-            # Instrument HTTP requests for API calls
-            logfire.instrument_httpx(capture_all=True)
-            
-            # Get and display Logfire dashboard URL
-            dashboard_url = self._get_logfire_dashboard_url()
-            
-            print("✅ Logfire instrumentation enabled")
-            if dashboard_url:
-                print(f"🔗 Logfire Dashboard: {dashboard_url}")
-                print(f"   View real-time traces, spans, and logs for debugging")
-                print(f"   Service: pyai-multi-agent | Project: {project_name}")
-                print("📊 All Pydantic AI agents, tools, and API calls are fully traced")
-            
-        except Exception as e:
-            print(f"⚠️  Warning: Could not configure Logfire: {e}")
-            self.enable_logfire = False
     
-    def _get_logfire_dashboard_url(self) -> Optional[str]:
-        """Generate the Logfire dashboard URL for this project."""
-        try:
-            # Get project info from Logfire configuration
-            import os
-            
-            # Try to get project name from environment or use default
-            project_name = os.getenv('LOGFIRE_PROJECT_NAME', 'pyai')
-            
-            # Construct dashboard URL
-            # Logfire uses format: https://logfire-us.pydantic.dev/{org}/{project}
-            # Default org is typically the username from the token
-            org_name = os.getenv('LOGFIRE_ORG_NAME', 'Kjdragan')  # Default from our setup
-            
-            dashboard_url = f"https://logfire-us.pydantic.dev/{org_name}/{project_name}"
-            
-            return dashboard_url
-            
-        except Exception as e:
-            # If we can't generate URL, return None silently
-            return None
     
     def _setup_base_logging(self):
         """Setup base Python logging configuration."""
@@ -252,13 +190,7 @@ class LoggingManager:
     
     def create_instrumentation_settings(self) -> Optional[InstrumentationSettings]:
         """Create custom instrumentation settings for Pydantic AI agents."""
-        if not self.enable_logfire:
-            return None
-        
         try:
-            from opentelemetry.sdk._events import EventLoggerProvider
-            from opentelemetry.sdk.trace import TracerProvider
-            
             # Create custom providers if needed
             instrumentation_settings = InstrumentationSettings(
                 include_content=True,  # Include prompts and completions
@@ -278,23 +210,6 @@ class LoggingManager:
         
         agent_logger.log_agent_start(query)
         
-        # Display Logfire dashboard URL for this agent execution
-        if self.enable_logfire:
-            dashboard_url = self._get_logfire_dashboard_url()
-            if dashboard_url:
-                agent_logger.info(f"🔗 View agent traces: {dashboard_url}")
-                
-                # Also try to get current trace ID for more specific link
-                try:
-                    import opentelemetry.trace as trace
-                    current_span = trace.get_current_span()
-                    if current_span and current_span.get_span_context().trace_id:
-                        trace_id = format(current_span.get_span_context().trace_id, '032x')
-                        trace_url = f"{dashboard_url}?q=trace_id%3D%27{trace_id}%27"
-                        agent_logger.info(f"🎯 Direct trace link: {trace_url}")
-                except Exception:
-                    # If we can't get trace ID, just show dashboard
-                    pass
         
         try:
             yield agent_logger
@@ -329,10 +244,10 @@ class LoggingManager:
 _logging_manager: Optional[LoggingManager] = None
 
 
-def initialize_logging(logs_dir: str = None, enable_logfire: bool = True) -> LoggingManager:
+def initialize_logging(logs_dir: str = None) -> LoggingManager:
     """Initialize the global logging manager."""
     global _logging_manager
-    _logging_manager = LoggingManager(logs_dir, enable_logfire)
+    _logging_manager = LoggingManager(logs_dir)
     return _logging_manager
 
 

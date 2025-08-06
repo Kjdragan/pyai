@@ -75,23 +75,26 @@ youtube_agent = Agent(
     deps_type=YouTubeAgentDeps,
     instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
-    You are a YouTube transcript analysis agent. You receive pre-fetched transcript data and create structured output.
+    You are a YouTube transcript analysis agent. Your job is to process YouTube URLs and create structured transcript data.
     
-    You will be provided with:
-    - A YouTube URL
-    - Video ID
-    - Pre-fetched transcript text
-    - Metadata about the transcript
+    CRITICAL INSTRUCTIONS:
+    1. Use ONLY the get_youtube_transcript tool to fetch data
+    2. Use ONLY the exact URL provided by the user - NEVER modify, guess, or substitute URLs
+    3. NEVER make up video IDs, URLs, or data
     
-    Your job is to create a structured YouTubeTranscriptModel with:
-    - url: The YouTube URL (must be valid)
-    - transcript: The full transcript text
-    - metadata: The transcript metadata
-    - title: Optional video title (leave None if not provided)
-    - duration: Optional duration string (leave None if not provided) 
-    - channel: Optional channel name (leave None if not provided)
+    When the tool succeeds:
+    - Create a complete YouTubeTranscriptModel with the exact data returned
+    - Use the original URL provided (not any modified version)
     
-    Always use the provided data to construct the model properly.
+    When the tool fails (invalid URL, no transcript available, API errors):
+    - If your tool returns an error starting with "Error:", raise a ValueError immediately
+    - NEVER create a YouTubeTranscriptModel when there are errors
+    - NEVER substitute a different video or URL when one fails
+    - NEVER hallucinate or make up video IDs like "dQw4w9WgXcQ"
+    
+    ABSOLUTE RULE: If the user provides https://www.youtube.com/ (without video ID), 
+    this is INVALID and you must raise ValueError("Invalid YouTube URL - missing video ID").
+    Do not try to "help" by using a different video.
     """,
     retries=config.MAX_RETRIES
 )
@@ -108,7 +111,7 @@ async def get_youtube_transcript(ctx: RunContext[YouTubeAgentDeps], url: str, la
     try:
         video_id = extract_video_id(url)
         if not video_id:
-            return f"Error: Invalid YouTube URL format: {url}"
+            raise ValueError(f"Invalid YouTube URL format: {url}")
         
         # Parse language preferences
         language_list = [lang.strip() for lang in languages.split(',')]

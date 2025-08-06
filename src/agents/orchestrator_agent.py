@@ -125,20 +125,52 @@ orchestrator_agent = Agent(
     system_prompt="""
     You are the Orchestrator Agent for a multi-agent system. Your responsibilities:
     
-    1. Parse user requests and determine which specialized agents to dispatch to
+    1. Parse user requests and intelligently extract structured parameters
     2. Coordinate execution using the available tools for each agent type
     3. Aggregate all results into a comprehensive MasterOutputModel
     4. Handle errors gracefully and provide meaningful feedback
     
+    INTELLIGENT QUERY PARSING:
+    When you receive a user query, you must intelligently extract and normalize relevant parameters:
+    
+    For YouTube requests:
+    - Extract YouTube URLs from the query text using pattern recognition
+    - Normalize URLs to standard format: https://www.youtube.com/watch?v=VIDEO_ID
+    - Support all YouTube URL formats: youtu.be, youtube.com/shorts, mobile, embed, etc.
+    - If no valid YouTube URL with video ID found, FAIL EARLY with clear error
+    - Valid video IDs are exactly 11 characters: [a-zA-Z0-9_-]
+    
+    For Weather requests:
+    - Extract location names from query text
+    - Normalize location formats
+    
+    For Research requests:
+    - Extract search terms and research focus areas
+    - Identify specific topics or trends to research
+    
     Available tools (use these to dispatch to specialized agents):
-    - dispatch_to_youtube_agent: For video transcript and metadata requests
-    - dispatch_to_weather_agent: For weather and forecast requests  
-    - dispatch_to_research_agents: For research, search, and information gathering
+    - dispatch_to_youtube_agent: Pass the NORMALIZED YouTube URL, not the raw query
+    - dispatch_to_weather_agent: Pass the extracted location
+    - dispatch_to_research_agents: Pass refined search terms
     - dispatch_to_report_writer: For generating reports from collected data
     
-    Always use the appropriate tools based on the user's request. For research requests about "latest developments", "trends", etc., use the research agents first, then generate a report.
+    CRITICAL: When calling tools, pass the EXTRACTED and NORMALIZED parameters, not the raw user query.
     
-    Return a complete MasterOutputModel with all relevant data populated.
+    Example flows:
+    1. User: "get transcript from https://youtu.be/dQw4w9WgXcQ and write a report"
+       → Extract: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+       → Call: dispatch_to_youtube_agent("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    
+    2. User: "research latest AI trends"
+       → Extract: "latest AI trends"
+       → Call: dispatch_to_research_agents("latest AI trends")
+    
+    ERROR HANDLING:
+    - If you cannot extract valid parameters (like invalid YouTube URL), FAIL immediately
+    - Set success=False and include detailed error messages
+    - Do not attempt to call tools with invalid parameters
+    
+    Always return a complete MasterOutputModel with all relevant data populated.
     """,
     retries=config.MAX_RETRIES
 )
@@ -146,7 +178,7 @@ orchestrator_agent = Agent(
 
 @orchestrator_agent.tool
 async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str) -> str:
-    """Dispatch job to YouTube agent."""
+    """Dispatch job to YouTube agent with AI-extracted and normalized URL."""
     try:
         await stream_update(StreamingUpdate(
             update_type="status",
@@ -189,6 +221,7 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
             # Store in centralized state for access by other agents
             if ctx.deps.state_manager:
                 ctx.deps.state_manager.update_youtube_data("YouTubeAgent", youtube_model)
+            ctx.deps.agents_used.append("YouTubeAgent")
             return f"YouTube agent completed successfully. Retrieved transcript with {len(response.data.get('transcript', ''))} characters."
         else:
             ctx.deps.errors.append(response.error)
@@ -377,76 +410,84 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
 
 @orchestrator_agent.tool
 async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: str, style: str = "summary") -> str:
-    """Dispatch job to Report Writer agent."""
+    """Dispatch job to Report Writer agent with universal data approach."""
     try:
         ctx.deps.agents_used.append("ReportWriterAgent")
         
-        # Get research data from centralized state, or create dummy data if none available
-        research_data = None
+        # Get unified data package from state manager
+        universal_data = None
         if ctx.deps.state_manager:
-            research_data = ctx.deps.state_manager.get_research_data()
+            universal_data = ctx.deps.state_manager.get_universal_report_data()
         
-        if not research_data:
-            # Create dummy research data for report-only requests
-            research_data = ResearchPipelineModel(
-                original_query=query,
-                sub_queries=[query],
-                results=[ResearchItem(
-                    query_variant=query,
-                    title="General Information",
-                    snippet=f"Information about {query}",
-                    relevance_score=1.0
-                )],
-                pipeline_type="tavily",
-                total_results=1
-            )
+        if not universal_data or not universal_data.has_data():
+            return "Error: No data available for report generation"
+        
+        # Build comprehensive prompt with all available data
+        data_types = universal_data.get_data_types()
+        primary_content = universal_data.get_primary_content()
+        
+        prompt = f"Generate a {style} report analyzing the following data:\n\n"
+        prompt += f"Data Sources Available: {', '.join(data_types)}\n"
+        prompt += f"User Query: {universal_data.query}\n\n"
+        
+        # Add section-by-section data
+        if universal_data.youtube_data:
+            prompt += f"YOUTUBE DATA:\n"
+            prompt += f"Title: {universal_data.youtube_data.title or 'Unknown'}\n"
+            prompt += f"URL: {universal_data.youtube_data.url}\n"
+            prompt += f"Duration: {universal_data.youtube_data.duration or 'Unknown'}\n"
+            prompt += f"Channel: {universal_data.youtube_data.channel or 'Unknown'}\n"
+            prompt += f"Transcript ({len(universal_data.youtube_data.transcript)} chars):\n{universal_data.youtube_data.transcript[:3000]}...\n\n"
+        
+        if universal_data.research_data:
+            prompt += f"RESEARCH DATA:\n"
+            prompt += f"Query: {universal_data.research_data.original_query}\n"
+            prompt += f"Results: {universal_data.research_data.total_results}\n"
+            for i, result in enumerate(universal_data.research_data.results[:5], 1):
+                prompt += f"{i}. {result.title}: {result.snippet}\n"
+            prompt += "\n"
+        
+        if universal_data.weather_data:
+            prompt += f"WEATHER DATA:\n{universal_data.weather_data}\n\n"
+        
+        prompt += f"Create a {style} report with distinct sections for each data source and quantified insights."
         
         try:
-            # Use proper Pydantic AI agent instead of direct function call
             from agents.report_writer_agent import report_writer_agent
-            report_result = await report_writer_agent.run(
-                f"Generate a {style} report based on this research data: {research_data.model_dump_json()}",
-                usage=ctx.usage
-            )
-            # Convert to AgentResponse format for compatibility
-            # Extract the actual ReportGenerationModel from AgentRunResult
+            report_result = await report_writer_agent.run(prompt, usage=ctx.usage)
+            
             if hasattr(report_result, 'data') and report_result.data:
                 result_data = report_result.data.model_dump() if hasattr(report_result.data, 'model_dump') else report_result.data
             else:
                 result_data = report_result.model_dump() if hasattr(report_result, 'model_dump') else report_result
             
-            report_response = AgentResponse(
+            response = AgentResponse(
                 agent_name="ReportWriterAgent",
                 success=True,
                 data=result_data,
                 error=None
             )
         except Exception as e:
-            report_response = AgentResponse(
-                agent_name="ReportWriterAgent",
+            response = AgentResponse(
+                agent_name="ReportWriterAgent", 
                 success=False,
                 data={},
                 error=str(e)
             )
             ctx.deps.errors.append(f"Report Writer: {str(e)}")
         
-        if report_response.success:
-            report_model = ReportGenerationModel(**report_response.data)
-            # Store in centralized state for access by other agents
+        if response.success:
+            report_model = ReportGenerationModel(**response.data)
             if ctx.deps.state_manager:
                 ctx.deps.state_manager.update_report_data("ReportWriterAgent", report_model)
-            else:
-                # Fallback to old logging if state manager not available
-                logger = ResearchDataLogger()
-                logger.log_report_state(report_model)
-            return f"Report generated successfully: {len(report_response.data.get('final', ''))} characters"
+            return f"Universal report generated successfully from {len(data_types)} data sources: {len(response.data.get('final', ''))} characters"
         else:
-            ctx.deps.errors.append(report_response.error)
-            return f"Error generating report: {report_response.error}"
+            ctx.deps.errors.append(response.error)
+            return f"Report Writer failed: {response.error}"
         
     except Exception as e:
         ctx.deps.errors.append(str(e))
-        return f"Error dispatching to Report Writer agent: {str(e)}"
+        return f"Error in universal report dispatch: {str(e)}"
 
 
 async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdate, None]:

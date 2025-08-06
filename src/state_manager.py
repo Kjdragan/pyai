@@ -95,6 +95,17 @@ class MasterStateManager:
     def get_weather_data(self) -> Optional[WeatherModel]:
         """Get weather data for use by other agents."""
         return self.master_state.weather_data
+
+        
+    def get_universal_report_data(self) -> 'UniversalReportData':
+        """Get unified data package for report generation."""
+        from models import UniversalReportData
+        return UniversalReportData(
+            query=self.master_state.job_request.query,
+            youtube_data=self.master_state.youtube_data,
+            research_data=self.master_state.research_data,
+            weather_data=self.master_state.weather_data
+        )
         
     def get_master_state(self) -> MasterOutputModel:
         """Get the complete master state document."""
