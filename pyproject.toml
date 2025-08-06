@@ -5,7 +5,7 @@ description = "Pydantic-AI Multi-Agent System"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "pydantic-ai[anthropic,logfire,openai]>=0.4.11",
+    "pydantic-ai[anthropic,examples,logfire,openai]>=0.4.11",
     "streamlit>=1.28.0",
     "httpx>=0.25.0",
     "youtube-transcript-api>=0.6.0",

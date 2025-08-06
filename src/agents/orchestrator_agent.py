@@ -184,8 +184,14 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
             ctx.deps.errors.append(f"YouTube: {str(e)}")
         
         if response.success:
+            # Create YouTubeTranscriptModel from the response data
+            youtube_model = YouTubeTranscriptModel(**response.data)
+            # Store in centralized state for access by other agents
+            if ctx.deps.state_manager:
+                ctx.deps.state_manager.update_youtube_data("YouTubeAgent", youtube_model)
             return f"YouTube agent completed successfully. Retrieved transcript with {len(response.data.get('transcript', ''))} characters."
         else:
+            ctx.deps.errors.append(response.error)
             return f"YouTube agent failed: {response.error}"
             
     except Exception as e:
