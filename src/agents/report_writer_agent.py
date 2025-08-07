@@ -155,19 +155,22 @@ def get_report_template(style: str, source_type: str) -> str:
     return templates.get(style, {}).get(source_type, templates["summary"][source_type])
 
 
-async def generate_report_draft(
+async def generate_complete_report(
     data: Union[ResearchPipelineModel, YouTubeTranscriptModel],
     style: str,
     template: str
 ) -> str:
-    """Generate initial report draft."""
+    """Generate complete report in a single LLM call for optimal performance."""
     
-    # Create content-specific generation agent with instrumentation
+    # PERFORMANCE OPTIMIZATION: Single LLM call instead of draft + refinement
+    # This reduces report generation from ~110s to expected ~30-45s
     generation_agent = Agent(
-        OpenAIModel(config.DEFAULT_MODEL),
+        OpenAIModel(config.NANO_MODEL),  # Use fast model for reports to reduce cost/time
         instrument=True,  # Enable Pydantic AI tracing
         system_prompt=f"""
-        You are an expert report writer. Generate a {style} report using the provided template.
+        You are an expert report writer. Generate a polished, final {style} report using the provided template.
+        
+        CRITICAL PERFORMANCE REQUIREMENT: Generate the FINAL report in one pass - no draft/refinement needed.
         
         Guidelines:
         - Follow the template structure exactly
@@ -175,6 +178,8 @@ async def generate_report_draft(
         - Include specific details from the source data
         - Make insights actionable and relevant
         - Ensure proper flow between sections
+        - Write with publication-ready quality (no refinement step)
+        - Focus on key insights and quantifiable findings
         
         Template to follow:
         {template}
@@ -191,63 +196,51 @@ async def generate_report_draft(
         
         Research Results:
         """
-        for item in data.results[:10]:  # Limit to top 10 results
+        for item in data.results[:8]:  # Optimize to top 8 results for performance
             # Use full scraped content if available, otherwise fall back to snippet
             content_to_use = item.scraped_content if (item.content_scraped and item.scraped_content) else item.snippet
-            # USE FULL CONTENT WITHOUT ANY TRUNCATION for maximum report quality
+            # Truncate excessively long content for performance while maintaining quality
+            if len(content_to_use) > 1000:
+                content_to_use = content_to_use[:1000] + "..."
             
             # Add scraping status indicator
-            scraping_status = " [FULL CONTENT]" if item.content_scraped else " [SNIPPET ONLY]"
+            scraping_status = " [FULL]" if item.content_scraped else " [SNIPPET]"
             content_summary += f"\n- {item.title}{scraping_status}: {content_to_use}"
         
         title = data.original_query
         
     else:  # YouTubeTranscriptModel
-        # YouTube-based report
+        # YouTube-based report - optimize transcript length for performance
+        transcript_length = len(data.transcript)
+        if transcript_length > 15000:
+            # For very long transcripts, use first portion + summary strategy
+            transcript_content = data.transcript[:12000] + "\n\n[Transcript continues for additional " + str(transcript_length - 12000) + " characters...]"
+        else:
+            transcript_content = data.transcript
+            
         content_summary = f"""
         Video URL: {data.url}
-        Transcript Length: {len(data.transcript)} characters
+        Video Title: {data.metadata.get('title', 'YouTube Video')}
+        Channel: {data.metadata.get('channel', 'Unknown')}
+        Duration: {data.metadata.get('duration_seconds', 'Unknown')} seconds
+        Transcript Length: {transcript_length} characters
         
         Video Content:
-        {data.transcript[:2000]}...
+        {transcript_content}
         """
         title = data.metadata.get("title", "YouTube Video Analysis")
     
     prompt = f"""
-    Generate a {style} report based on this content:
+    Generate a final, polished {style} report based on this content:
     
     {content_summary}
     
     Use "{title}" as the main title.
     Follow the template structure provided in your system prompt.
+    Create a publication-ready report with clear insights and actionable recommendations.
     """
     
     result = await generation_agent.run(prompt)
-    return result.data
-
-
-async def refine_report(draft: str, style: str) -> str:
-    """Refine and edit the report draft."""
-    
-    refinement_agent = Agent(
-        OpenAIModel(config.DEFAULT_MODEL),
-        instrument=True,  # Enable Pydantic AI tracing
-        system_prompt=f"""
-        You are an expert editor. Your job is to refine and improve the provided {style} report.
-        
-        Focus on:
-        - Clarity and readability
-        - Logical flow and structure
-        - Grammar and style consistency
-        - Factual accuracy and coherence
-        - Professional tone
-        
-        Return the improved version of the report.
-        """,
-        retries=2
-    )
-    
-    result = await refinement_agent.run(f"Please refine and improve this {style} report:\n\n{draft}")
     return result.data
 
 
@@ -295,7 +288,7 @@ async def process_report_request(
     data: Union[ResearchPipelineModel, YouTubeTranscriptModel],
     style: str = "summary"
 ) -> AgentResponse:
-    """Process report generation request."""
+    """Process report generation request with single-call optimization."""
     start_time = asyncio.get_event_loop().time()
     
     try:
@@ -305,20 +298,18 @@ async def process_report_request(
         # Get template
         template = get_report_template(style, source_type)
         
-        # Generate draft
-        draft = await generate_report_draft(data, style, template)
-        
-        # Refine the draft
-        final_report = await refine_report(draft, style)
+        # PERFORMANCE OPTIMIZATION: Generate final report in single call
+        # This eliminates the dual LLM call approach (draft + refinement)
+        final_report = await generate_complete_report(data, style, template)
         
         # Count words
         word_count = len(final_report.split())
         
-        # Create result model
+        # Create result model - use final_report as both draft and final for compatibility
         result = ReportGenerationModel(
             style=style,
             prompt_template=template,
-            draft=draft,
+            draft="[Single-pass generation - no separate draft created]",  # Indicate optimized approach
             final=final_report,
             source_type=source_type,
             word_count=word_count,

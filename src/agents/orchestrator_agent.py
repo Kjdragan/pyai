@@ -25,14 +25,16 @@ from state_manager import MasterStateManager
 
 
 class OrchestratorDeps:
-    """Dependencies for Orchestrator Agent with centralized state management."""
+    """Dependencies for Orchestrator Agent with centralized state management and execution tracking."""
     def __init__(self, state_manager: MasterStateManager = None):
         self.timeout = config.REQUEST_TIMEOUT
         self.orchestrator_id = str(uuid.uuid4())
         self.start_time = asyncio.get_event_loop().time()
-        self.agents_used = []
+        self.agents_used = []  # All agent calls (including duplicates for tracking)
+        self.completed_agents = set()  # Successfully completed agents (prevents duplicates)
+        self.agent_results = {}  # Cache results to avoid re-execution
         self.errors = []
-        self.state_manager = state_manager  # Centralized state access
+        self.state_manager = state_manager  # Centralized state access  # Centralized state access
 
 
 def extract_youtube_url(text: str) -> str:
@@ -123,12 +125,31 @@ orchestrator_agent = Agent(
     output_type=str,  # Return coordination summary, not full MasterOutputModel
     instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
-    You are the Orchestrator Agent for a multi-agent system. Your responsibilities:
+    You are the Orchestrator Agent for a multi-agent system with PARALLEL EXECUTION capabilities. Your responsibilities:
     
     1. Parse user requests and intelligently extract structured parameters
-    2. Coordinate execution using the available tools for each agent type
+    2. Coordinate execution using optimal parallel/sequential strategies
     3. Return a summary of coordination results (state is managed externally)
     4. Handle errors gracefully and provide meaningful feedback
+    
+    PERFORMANCE OPTIMIZATION:
+    You now have advanced parallel execution tools that can dramatically improve performance:
+    
+    PARALLEL EXECUTION TOOLS (use these for maximum speed):
+    - analyze_and_execute_optimal_workflow: PREFERRED tool for complex multi-agent requests
+      * Automatically analyzes dependencies and runs independent agents in parallel
+      * Handles YouTube + Weather + Research concurrently, then Report sequentially
+      * Use this for any request involving multiple data sources
+    
+    - dispatch_parallel_independent_agents: For simple parallel dispatch
+      * Run multiple independent agents simultaneously (youtube,weather,research)
+      * Faster than sequential calls for independent operations
+    
+    SINGLE AGENT TOOLS (use only when parallel tools aren't suitable):
+    - dispatch_to_youtube_agent: Pass the NORMALIZED YouTube URL, not the raw query
+    - dispatch_to_weather_agent: Pass the extracted location
+    - dispatch_to_research_agents: Pass refined search terms
+    - dispatch_to_report_writer: For generating reports from collected data
     
     INTELLIGENT QUERY PARSING:
     When you receive a user query, you must intelligently extract and normalize relevant parameters:
@@ -148,37 +169,366 @@ orchestrator_agent = Agent(
     - Extract search terms and research focus areas
     - Identify specific topics or trends to research
     
-    Available tools (use these to dispatch to specialized agents):
-    - dispatch_to_youtube_agent: Pass the NORMALIZED YouTube URL, not the raw query
-    - dispatch_to_weather_agent: Pass the extracted location
-    - dispatch_to_research_agents: Pass refined search terms
-    - dispatch_to_report_writer: For generating reports from collected data
+    EXECUTION STRATEGY DECISION MATRIX:
     
-    CRITICAL: When calling tools, pass the EXTRACTED and NORMALIZED parameters, not the raw user query.
+    1. COMPLEX MULTI-AGENT REQUESTS (YouTube + Report, Research + Analysis, etc.):
+       → USE: analyze_and_execute_optimal_workflow(user_query)
+       → REASON: Automatic parallel optimization with dependency management
     
-    Example flows:
-    1. User: "get transcript from https://youtu.be/dQw4w9WgXcQ and write a report"
-       → Extract: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-       → Call: dispatch_to_youtube_agent("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+    2. SIMPLE PARALLEL REQUESTS (YouTube + Weather, multiple independent tasks):
+       → USE: dispatch_parallel_independent_agents("youtube,weather", user_query)
+       → REASON: Fast concurrent execution for independent operations
     
-    2. User: "research latest AI trends"
-       → Extract: "latest AI trends"
-       → Call: dispatch_to_research_agents("latest AI trends")
+    3. SINGLE AGENT REQUESTS (just YouTube, just research, just weather):
+       → USE: Individual dispatch tools (dispatch_to_youtube_agent, etc.)
+       → REASON: No parallelization benefit
+    
+    PERFORMANCE EXAMPLES:
+    
+    User: "get transcript from https://youtu.be/ABC123 and create comprehensive report"
+    → BEST: analyze_and_execute_optimal_workflow(user_query)
+    → RESULT: YouTube transcript fetched, then report generated (optimal sequence)
+    
+    User: "get weather in NYC and transcript from https://youtu.be/XYZ789"  
+    → BEST: dispatch_parallel_independent_agents("youtube,weather", user_query)
+    → RESULT: Both agents run simultaneously (50% faster)
+    
+    User: "research AI trends and get weather in Tokyo"
+    → BEST: dispatch_parallel_independent_agents("research,weather", user_query) 
+    → RESULT: Research and weather fetched concurrently
     
     ERROR HANDLING:
     - If you cannot extract valid parameters (like invalid YouTube URL), FAIL immediately
     - Set success=False and include detailed error messages
     - Do not attempt to call tools with invalid parameters
+    - Parallel tools have built-in error isolation (one failure won't stop others)
     
-    Return a brief coordination summary of what was accomplished and any issues encountered.
+    CRITICAL: When calling tools, pass the EXTRACTED and NORMALIZED parameters, not the raw user query.
+    
+    Return a brief coordination summary of what was accomplished, execution strategy used, and any issues encountered.
     """,
     retries=config.MAX_RETRIES
 )
 
 
 @orchestrator_agent.tool
+async def dispatch_parallel_independent_agents(ctx: RunContext[OrchestratorDeps], agent_list: str, task_description: str) -> str:
+    """Dispatch multiple independent agents in parallel for faster execution.
+    
+    Args:
+        agent_list: Comma-separated list of agents to run (e.g., "youtube,weather")
+        task_description: Description of what each agent should do
+    """
+    import asyncio
+    from typing import Dict, Any
+    
+    # Parse agent list
+    agents_to_run = [agent.strip().lower() for agent in agent_list.split(',')]
+    
+    await stream_update(StreamingUpdate(
+        update_type="status",
+        agent_name="Orchestrator", 
+        message=f"Starting parallel execution of {len(agents_to_run)} independent agents"
+    ))
+    
+    # Create parallel tasks based on agents requested
+    parallel_tasks = []
+    task_names = []
+    
+    for agent_name in agents_to_run:
+        if agent_name in ctx.deps.completed_agents:
+            continue  # Skip already completed agents
+            
+        if agent_name == "youtube":
+            # Extract YouTube URL from task description
+            url = extract_youtube_url(task_description)
+            if url:
+                task = dispatch_to_youtube_agent(ctx, url)
+                parallel_tasks.append(task)
+                task_names.append("YouTube")
+        
+        elif agent_name == "weather":
+            # Extract location from task description (simple heuristic)
+            # This would need smarter extraction in production
+            words = task_description.split()
+            location = "New York"  # Default fallback
+            for i, word in enumerate(words):
+                if word.lower() in ["weather", "forecast", "temperature"] and i + 1 < len(words):
+                    location = words[i + 1]
+                    break
+            task = dispatch_to_weather_agent(ctx, location)
+            parallel_tasks.append(task)
+            task_names.append("Weather")
+        
+        elif agent_name in ["research", "tavily", "serper"]:
+            task = dispatch_to_research_agents(ctx, task_description, "both")
+            parallel_tasks.append(task)
+            task_names.append("Research")
+    
+    if not parallel_tasks:
+        return "No independent agents to run in parallel (all completed or none specified)"
+    
+    # Execute all tasks concurrently
+    try:
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Executing {len(parallel_tasks)} agents concurrently: {', '.join(task_names)}"
+        ))
+        
+        results = await asyncio.gather(*parallel_tasks, return_exceptions=True)
+        
+        # Process results
+        success_count = 0
+        total_agents = len(results)
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                ctx.deps.errors.append(f"Parallel {task_names[i]} failed: {str(result)}")
+            else:
+                success_count += 1
+        
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Parallel execution completed: {success_count}/{total_agents} agents succeeded"
+        ))
+        
+        return f"Parallel execution completed: {success_count}/{total_agents} agents succeeded. " \
+               f"Agents: {', '.join(task_names)}"
+        
+    except Exception as e:
+        error_msg = f"Error in parallel execution: {str(e)}"
+        ctx.deps.errors.append(error_msg)
+        return error_msg
+
+@orchestrator_agent.tool
+async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps], user_query: str) -> str:
+    """Analyze user query and execute agents in optimal order (parallel where possible).
+    
+    This tool intelligently determines which agents can run in parallel vs sequentially
+    based on their dependencies and the user's request.
+    """
+    import asyncio
+    
+    # Analyze what agents are needed based on query
+    needs_youtube = "youtube.com" in user_query or "youtu.be" in user_query
+    needs_weather = any(word in user_query.lower() for word in ["weather", "temperature", "forecast", "climate"])
+    needs_research = any(word in user_query.lower() for word in ["research", "search", "find", "investigate", "analyze"])
+    needs_report = any(word in user_query.lower() for word in ["report", "summary", "analyze", "write", "document"])
+    
+    await stream_update(StreamingUpdate(
+        update_type="status",
+        agent_name="Orchestrator",
+        message="Analyzing workflow dependencies and planning optimal execution"
+    ))
+    
+    # Phase 1: Independent data collection agents (can run in parallel)
+    phase1_tasks = []
+    phase1_names = []
+    
+    if needs_youtube and "YouTubeAgent" not in ctx.deps.completed_agents:
+        url = extract_youtube_url(user_query)
+        if url:
+            phase1_tasks.append(dispatch_to_youtube_agent(ctx, url))
+            phase1_names.append("YouTube")
+    
+    if needs_weather and "WeatherAgent" not in ctx.deps.completed_agents:
+        # Simple location extraction - in production this would be more sophisticated
+        location = "New York"  # Default
+        words = user_query.split()
+        for i, word in enumerate(words):
+            if word.lower() in ["weather", "in", "for"] and i + 1 < len(words):
+                potential_location = words[i + 1].strip(".,!?")
+                if len(potential_location) > 2:  # Basic validation
+                    location = potential_location
+                    break
+        phase1_tasks.append(dispatch_to_weather_agent(ctx, location))
+        phase1_names.append("Weather")
+    
+    if needs_research and "ResearchAgents" not in ctx.deps.completed_agents:
+        phase1_tasks.append(dispatch_to_research_agents(ctx, user_query, "both"))
+        phase1_names.append("Research")
+    
+    # Execute Phase 1 (parallel data collection)
+    phase1_results = []
+    if phase1_tasks:
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Phase 1: Parallel data collection ({len(phase1_tasks)} agents: {', '.join(phase1_names)})"
+        ))
+        
+        phase1_results = await asyncio.gather(*phase1_tasks, return_exceptions=True)
+        
+        # Log Phase 1 results
+        success_count = sum(1 for result in phase1_results if not isinstance(result, Exception))
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator", 
+            message=f"Phase 1 completed: {success_count}/{len(phase1_tasks)} data agents succeeded"
+        ))
+    
+    # Phase 2: Report generation (depends on Phase 1 data)
+    phase2_result = ""
+    if needs_report and "ReportWriterAgent" not in ctx.deps.completed_agents:
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message="Phase 2: Generating report from collected data"
+        ))
+        
+        try:
+            report_result = await dispatch_to_report_writer(ctx, user_query, "comprehensive")
+            phase2_result = f" -> {report_result}"
+        except Exception as e:
+            phase2_result = f" -> Report generation failed: {str(e)}"
+            ctx.deps.errors.append(f"Phase 2 Report: {str(e)}")
+    
+    # Summary
+    total_success = sum(1 for result in phase1_results if not isinstance(result, Exception))
+    if phase2_result and "failed" not in phase2_result:
+        total_success += 1
+    
+    return f"Optimal workflow executed: Phase 1 ({len(phase1_names)} parallel agents) -> Phase 2 (report). " \
+           f"Total success: {total_success} agents{phase2_result}"
+
+@orchestrator_agent.tool
+async def generate_trace_analysis_report(ctx: RunContext[OrchestratorDeps], analysis_request: str) -> str:
+    """Generate automated trace analysis report for system performance insights.
+    
+    Args:
+        analysis_request: Request describing what type of analysis to perform
+                         (e.g., "performance analysis last hour", "cost optimization", "error analysis")
+    """
+    try:
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message="Initiating trace analysis - gathering performance data"
+        ))
+        
+        # Parse the analysis request to determine parameters
+        request_lower = analysis_request.lower()
+        
+        # Determine analysis type
+        if "cost" in request_lower or "optimization" in request_lower:
+            analysis_type = "cost"
+            time_range = 1440  # 24 hours for cost analysis
+        elif "error" in request_lower or "failure" in request_lower:
+            analysis_type = "error"
+            time_range = 60
+        elif "performance" in request_lower:
+            analysis_type = "performance" 
+            time_range = 60
+        else:
+            analysis_type = "comprehensive"
+            time_range = 60
+        
+        # Extract time range if specified
+        if "hour" in request_lower and "last" in request_lower:
+            time_range = 60
+        elif "day" in request_lower and "last" in request_lower:
+            time_range = 1440
+        elif "week" in request_lower and "last" in request_lower:
+            time_range = 10080
+        
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Running {analysis_type} analysis for last {time_range} minutes"
+        ))
+        
+        # Import and run trace analyzer
+        from agents.trace_analyzer_agent import analyze_traces
+        
+        trace_report = await analyze_traces(
+            time_range_minutes=time_range,
+            analysis_type=analysis_type,
+            max_traces=100
+        )
+        
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator", 
+            message="Trace analysis completed - generating insights"
+        ))
+        
+        # Format results for user
+        insights_summary = f"""
+        📊 TRACE ANALYSIS RESULTS ({analysis_type.title()})
+        
+        📈 SYSTEM PERFORMANCE:
+        • Total Traces Analyzed: {trace_report.total_traces_analyzed}
+        • Success Rate: {trace_report.success_rate:.1%}
+        • Average Job Time: {trace_report.average_job_time:.1f}s
+        • Total API Calls: {trace_report.total_api_calls}
+        
+        🎯 KEY INSIGHTS:
+        • Health Status: {trace_report.insights.overall_system_health.title()}
+        • Critical Issues: {len(trace_report.insights.critical_issues)} found
+        • Optimization Opportunities: {len(trace_report.insights.optimization_recommendations)}
+        
+        ⚡ IMMEDIATE ACTIONS:
+        """
+        
+        for action in trace_report.immediate_actions[:3]:  # Top 3 actions
+            insights_summary += f"• {action}\n        "
+        
+        if trace_report.cost_analysis:
+            insights_summary += f"""
+        💰 COST ANALYSIS:
+        • Estimated Cost: ${trace_report.cost_analysis.estimated_cost_usd:.2f}
+        • Optimization Potential: {len(trace_report.cost_analysis.optimization_opportunities)} opportunities
+        """
+        
+        insights_summary += f"""
+        
+        🔧 STRATEGIC IMPROVEMENTS:
+        """
+        
+        for improvement in trace_report.strategic_improvements[:2]:  # Top 2 improvements
+            insights_summary += f"• {improvement}\n        "
+        
+        # Store the full report in state for later access if needed
+        if ctx.deps.state_manager:
+            # Store as a simplified dict for state management
+            ctx.deps.agent_results["TraceAnalyzer"] = {
+                'success': True,
+                'data': {
+                    'analysis_type': trace_report.analysis_type,
+                    'total_traces': trace_report.total_traces_analyzed,
+                    'success_rate': trace_report.success_rate,
+                    'health_status': trace_report.insights.overall_system_health,
+                    'summary': insights_summary
+                }
+            }
+            ctx.deps.completed_agents.add("TraceAnalyzer")
+            ctx.deps.agents_used.append("TraceAnalyzer")
+        
+        return f"Trace analysis completed successfully. Generated {analysis_type} analysis report with {len(trace_report.insights.optimization_recommendations)} optimization recommendations and {len(trace_report.immediate_actions)} immediate action items."
+        
+    except Exception as e:
+        error_msg = f"Trace analysis failed: {str(e)}"
+        ctx.deps.errors.append(error_msg)
+        return error_msg
+
+@orchestrator_agent.tool
 async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str) -> str:
     """Dispatch job to YouTube agent with AI-extracted and normalized URL."""
+    agent_name = "YouTubeAgent"
+    
+    # Check if this agent has already been completed successfully
+    if agent_name in ctx.deps.completed_agents:
+        cached_result = ctx.deps.agent_results.get(agent_name)
+        if cached_result and cached_result.get('success'):
+            await stream_update(StreamingUpdate(
+                update_type="status",
+                agent_name="Orchestrator",
+                message=f"Using cached YouTube result for: {url}"
+            ))
+            return f"YouTube agent already completed (cached). Retrieved transcript with {len(cached_result.get('data', {}).get('transcript', ''))} characters."
+    
     try:
         await stream_update(StreamingUpdate(
             update_type="status",
@@ -201,27 +551,37 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
                 result_data = youtube_result.model_dump() if hasattr(youtube_result, 'model_dump') else youtube_result
             
             response = AgentResponse(
-                agent_name="YouTubeAgent",
+                agent_name=agent_name,
                 success=True,
                 data=result_data,
                 error=None
             )
         except Exception as e:
             response = AgentResponse(
-                agent_name="YouTubeAgent",
+                agent_name=agent_name,
                 success=False,
                 data={},
                 error=str(e)
             )
             ctx.deps.errors.append(f"YouTube: {str(e)}")
         
+        # Cache the result regardless of success/failure
+        ctx.deps.agent_results[agent_name] = {
+            'success': response.success,
+            'data': response.data,
+            'error': response.error
+        }
+        
         if response.success:
             # Create YouTubeTranscriptModel from the response data
             youtube_model = YouTubeTranscriptModel(**response.data)
             # Store in centralized state for access by other agents
             if ctx.deps.state_manager:
-                ctx.deps.state_manager.update_youtube_data("YouTubeAgent", youtube_model)
-            ctx.deps.agents_used.append("YouTubeAgent")
+                ctx.deps.state_manager.update_youtube_data(agent_name, youtube_model)
+            
+            # Mark as completed to prevent duplication
+            ctx.deps.completed_agents.add(agent_name)
+            ctx.deps.agents_used.append(agent_name)
             return f"YouTube agent completed successfully. Retrieved transcript with {len(response.data.get('transcript', ''))} characters."
         else:
             ctx.deps.errors.append(response.error)
@@ -411,9 +771,20 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
 @orchestrator_agent.tool
 async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: str, style: str = "summary") -> str:
     """Dispatch job to Report Writer agent with universal data approach."""
+    agent_name = "ReportWriterAgent"
+    
+    # Check if this agent has already been completed successfully
+    if agent_name in ctx.deps.completed_agents:
+        cached_result = ctx.deps.agent_results.get(agent_name)
+        if cached_result and cached_result.get('success'):
+            await stream_update(StreamingUpdate(
+                update_type="status",
+                agent_name="Orchestrator",
+                message=f"Using cached report writer result"
+            ))
+            return f"Report Writer already completed (cached). Report length: {len(cached_result.get('data', {}).get('final', ''))} characters."
+    
     try:
-        ctx.deps.agents_used.append("ReportWriterAgent")
-        
         # Get unified data package from state manager
         universal_data = None
         if ctx.deps.state_manager:
@@ -426,29 +797,29 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
         data_types = universal_data.get_data_types()
         primary_content = universal_data.get_primary_content()
         
-        prompt = f"Generate a {style} report analyzing the following data:\n\n"
-        prompt += f"Data Sources Available: {', '.join(data_types)}\n"
-        prompt += f"User Query: {universal_data.query}\n\n"
+        prompt = f"Generate a {style} report analyzing the following data:\\n\\n"
+        prompt += f"Data Sources Available: {', '.join(data_types)}\\n"
+        prompt += f"User Query: {universal_data.query}\\n\\n"
         
         # Add section-by-section data
         if universal_data.youtube_data:
-            prompt += f"YOUTUBE DATA:\n"
-            prompt += f"Title: {universal_data.youtube_data.title or 'Unknown'}\n"
-            prompt += f"URL: {universal_data.youtube_data.url}\n"
-            prompt += f"Duration: {universal_data.youtube_data.duration or 'Unknown'}\n"
-            prompt += f"Channel: {universal_data.youtube_data.channel or 'Unknown'}\n"
-            prompt += f"Transcript ({len(universal_data.youtube_data.transcript)} chars):\n{universal_data.youtube_data.transcript[:3000]}...\n\n"
+            prompt += f"YOUTUBE DATA:\\n"
+            prompt += f"Title: {universal_data.youtube_data.title or 'Unknown'}\\n"
+            prompt += f"URL: {universal_data.youtube_data.url}\\n"
+            prompt += f"Duration: {universal_data.youtube_data.duration or 'Unknown'}\\n"
+            prompt += f"Channel: {universal_data.youtube_data.channel or 'Unknown'}\\n"
+            prompt += f"Transcript ({len(universal_data.youtube_data.transcript)} chars):\\n{universal_data.youtube_data.transcript[:3000]}...\\n\\n"
         
         if universal_data.research_data:
-            prompt += f"RESEARCH DATA:\n"
-            prompt += f"Query: {universal_data.research_data.original_query}\n"
-            prompt += f"Results: {universal_data.research_data.total_results}\n"
+            prompt += f"RESEARCH DATA:\\n"
+            prompt += f"Query: {universal_data.research_data.original_query}\\n"
+            prompt += f"Results: {universal_data.research_data.total_results}\\n"
             for i, result in enumerate(universal_data.research_data.results[:5], 1):
-                prompt += f"{i}. {result.title}: {result.snippet}\n"
-            prompt += "\n"
+                prompt += f"{i}. {result.title}: {result.snippet}\\n"
+            prompt += "\\n"
         
         if universal_data.weather_data:
-            prompt += f"WEATHER DATA:\n{universal_data.weather_data}\n\n"
+            prompt += f"WEATHER DATA:\\n{universal_data.weather_data}\\n\\n"
         
         prompt += f"Create a {style} report with distinct sections for each data source and quantified insights."
         
@@ -462,24 +833,35 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
                 result_data = report_result.model_dump() if hasattr(report_result, 'model_dump') else report_result
             
             response = AgentResponse(
-                agent_name="ReportWriterAgent",
+                agent_name=agent_name,
                 success=True,
                 data=result_data,
                 error=None
             )
         except Exception as e:
             response = AgentResponse(
-                agent_name="ReportWriterAgent", 
+                agent_name=agent_name, 
                 success=False,
                 data={},
                 error=str(e)
             )
             ctx.deps.errors.append(f"Report Writer: {str(e)}")
         
+        # Cache the result regardless of success/failure
+        ctx.deps.agent_results[agent_name] = {
+            'success': response.success,
+            'data': response.data,
+            'error': response.error
+        }
+        
         if response.success:
             report_model = ReportGenerationModel(**response.data)
             if ctx.deps.state_manager:
-                ctx.deps.state_manager.update_report_data("ReportWriterAgent", report_model)
+                ctx.deps.state_manager.update_report_data(agent_name, report_model)
+            
+            # Mark as completed to prevent duplication
+            ctx.deps.completed_agents.add(agent_name)
+            ctx.deps.agents_used.append(agent_name)
             return f"Universal report generated successfully from {len(data_types)} data sources: {len(response.data.get('final', ''))} characters"
         else:
             ctx.deps.errors.append(response.error)

@@ -8,6 +8,7 @@ from .research_tavily_agent import tavily_research_agent, process_tavily_researc
 from .research_serper_agent import serper_research_agent, process_serper_research_request
 from .report_writer_agent import report_writer_agent, process_report_request
 from .orchestrator_agent import orchestrator_agent, run_orchestrator_job
+from .trace_analyzer_agent import trace_analyzer_agent, analyze_traces
 
 __all__ = [
     # Agents
@@ -17,6 +18,7 @@ __all__ = [
     "serper_research_agent",
     "report_writer_agent",
     "orchestrator_agent",
+    "trace_analyzer_agent",
     
     # Processing functions
     "process_youtube_request",
@@ -24,7 +26,8 @@ __all__ = [
     "process_tavily_research_request", 
     "process_serper_research_request",
     "process_report_request",
-    "run_orchestrator_job"
+    "run_orchestrator_job",
+    "analyze_traces"
 ]
 
 
@@ -59,6 +62,11 @@ AGENT_REGISTRY = {
         "agent": orchestrator_agent,
         "processor": run_orchestrator_job,
         "description": "Central coordinator for multi-agent workflows"
+    },
+    "trace_analyzer": {
+        "agent": trace_analyzer_agent,
+        "processor": analyze_traces,
+        "description": "Automated performance analysis and optimization recommendations"
     }
 }
 

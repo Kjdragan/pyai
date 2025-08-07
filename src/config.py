@@ -25,14 +25,21 @@ class Config:
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
     OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
     SERPER_API_KEY: str = os.getenv("SERPER_API_KEY", "")
+    YOUTUBE_DATA_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "")
     
-    # Model configurations
-    DEFAULT_MODEL: str = os.getenv('DEFAULT_MODEL', 'gpt-4o')
-    ORCHESTRATOR_MODEL: str = os.getenv('ORCHESTRATOR_MODEL', 'gpt-4o')
-    RESEARCH_MODEL: str = os.getenv('RESEARCH_MODEL', 'gpt-4o')
-    WEATHER_MODEL: str = os.getenv('WEATHER_MODEL', 'gpt-4o')
-    YOUTUBE_MODEL: str = os.getenv('YOUTUBE_MODEL', 'gpt-4o')
-    REPORT_MODEL: str = os.getenv('REPORT_MODEL', 'gpt-4o')
+    # Model configurations - Smart model selection for cost/performance optimization
+    # Fast/Cheap model for simple tasks
+    NANO_MODEL: str = "gpt-4.1-nano-2025-04-14"
+    # Intelligent model for complex reasoning  
+    STANDARD_MODEL: str = "gpt-4o"
+    
+    # Agent-specific model assignments (respects environment variables)
+    DEFAULT_MODEL: str = os.getenv('DEFAULT_MODEL', 'gpt-4o-mini')  # Default to efficient model
+    ORCHESTRATOR_MODEL: str = os.getenv('ORCHESTRATOR_MODEL', STANDARD_MODEL)  # Complex coordination
+    RESEARCH_MODEL: str = os.getenv('RESEARCH_MODEL', NANO_MODEL)  # Query expansion/parsing  
+    WEATHER_MODEL: str = os.getenv('WEATHER_MODEL', NANO_MODEL)  # Simple API data processing
+    YOUTUBE_MODEL: str = os.getenv('YOUTUBE_MODEL', NANO_MODEL)  # Transcript extraction/processing
+    REPORT_MODEL: str = os.getenv('REPORT_MODEL', STANDARD_MODEL)  # Quality reasoning needed
     
     # Agent Settings
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
@@ -73,6 +80,32 @@ class Config:
             "max_retries": cls.MAX_RETRIES,
             "timeout": cls.REQUEST_TIMEOUT,
         }
+    
+    @classmethod
+    def get_agent_model(cls, agent_type: str) -> str:
+        """Get the appropriate model for a specific agent type with fallback logic."""
+        model_map = {
+            "orchestrator": cls.ORCHESTRATOR_MODEL,
+            "youtube": cls.YOUTUBE_MODEL,
+            "weather": cls.WEATHER_MODEL,
+            "research": cls.RESEARCH_MODEL,
+            "report": cls.REPORT_MODEL,
+            "tavily": cls.RESEARCH_MODEL,
+            "serper": cls.RESEARCH_MODEL,
+        }
+        return model_map.get(agent_type.lower(), cls.DEFAULT_MODEL)
+    
+    @classmethod
+    def get_fallback_model(cls, current_model: str) -> str:
+        """Get fallback model if current model fails."""
+        if current_model == cls.NANO_MODEL:
+            return cls.STANDARD_MODEL
+        return cls.STANDARD_MODEL  # Always fallback to standard model
+    
+    @classmethod
+    def is_nano_model(cls, model: str) -> bool:
+        """Check if the model is the nano (fast/cheap) model."""
+        return model == cls.NANO_MODEL
 
 
 # Global config instance

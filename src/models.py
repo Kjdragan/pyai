@@ -165,3 +165,88 @@ class StreamingUpdate(BaseModel):
     message: str
     data: Optional[Dict] = None
     timestamp: datetime = Field(default_factory=datetime.now)
+
+
+# ============================================================================
+# TRACE ANALYSIS MODELS - For automated performance analytics
+# ============================================================================
+
+class PerformanceMetric(BaseModel):
+    """Individual performance metric from trace analysis."""
+    metric_name: str
+    value: float
+    unit: str
+    context: Optional[str] = None
+    threshold_status: Optional[Literal["good", "warning", "critical"]] = None
+
+
+class AgentPerformanceAnalysis(BaseModel):
+    """Performance analysis for a specific agent."""
+    agent_name: str
+    total_calls: int
+    success_rate: float
+    average_response_time: float
+    total_processing_time: float
+    error_count: int
+    common_errors: List[str] = Field(default_factory=list)
+    performance_rating: Literal["excellent", "good", "needs_improvement", "critical"]
+
+
+class CostAnalysis(BaseModel):
+    """Token usage and cost analysis from traces."""
+    total_input_tokens: int
+    total_output_tokens: int
+    estimated_cost_usd: float
+    cost_by_model: Dict[str, float] = Field(default_factory=dict)
+    cost_by_agent: Dict[str, float] = Field(default_factory=dict)
+    optimization_opportunities: List[str] = Field(default_factory=list)
+
+
+class TraceAnalysisInsights(BaseModel):
+    """LLM-generated insights from trace analysis."""
+    critical_issues: List[str] = Field(default_factory=list)
+    optimization_recommendations: List[str] = Field(default_factory=list)
+    performance_trends: List[str] = Field(default_factory=list)
+    cost_optimization_suggestions: List[str] = Field(default_factory=list)
+    reliability_assessment: str
+    overall_system_health: Literal["excellent", "good", "concerning", "critical"]
+
+
+class TraceAnalysisReport(BaseModel):
+    """Complete trace analysis report model."""
+    analysis_type: Literal["performance", "cost", "error", "comprehensive", "comparison"]
+    time_range: str
+    total_traces_analyzed: int
+    analysis_timestamp: datetime = Field(default_factory=datetime.now)
+    
+    # Core metrics
+    performance_metrics: List[PerformanceMetric] = Field(default_factory=list)
+    agent_analysis: List[AgentPerformanceAnalysis] = Field(default_factory=list)
+    cost_analysis: Optional[CostAnalysis] = None
+    
+    # LLM-generated insights
+    insights: TraceAnalysisInsights
+    
+    # Summary data
+    total_execution_time: float
+    average_job_time: float
+    success_rate: float
+    total_api_calls: int
+    
+    # Recommendations
+    immediate_actions: List[str] = Field(default_factory=list)
+    strategic_improvements: List[str] = Field(default_factory=list)
+    
+    # Report metadata
+    generated_by: str = "TraceAnalyzer Agent"
+    report_version: str = "1.0"
+
+
+class TraceQuery(BaseModel):
+    """Query parameters for trace analysis."""
+    time_range_minutes: int = 60  # Last N minutes
+    max_traces: int = 100
+    include_successful: bool = True
+    include_failed: bool = True
+    agent_filter: Optional[str] = None  # Filter by specific agent
+    analysis_focus: Literal["performance", "cost", "errors", "all"] = "all"
