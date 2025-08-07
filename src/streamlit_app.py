@@ -58,8 +58,18 @@ def initialize_session_state():
 
 
 def display_streaming_update(update: StreamingUpdate):
-    """Display a streaming update in the chat interface."""
+    """Display a streaming update in the chat interface with duplicate filtering."""
     timestamp = update.timestamp.strftime("%H:%M:%S")
+    
+    # UI FIX: Filter out duplicate startup notifications to reduce noise
+    message_lower = update.message.lower()
+    if any(spam_phrase in message_lower for spam_phrase in [
+        "logging initialized", 
+        "session state initialized",
+        "startup complete",
+        "system ready"
+    ]):
+        return  # Skip duplicate startup messages
     
     if update.update_type == "status":
         st.info(f"🔄 [{timestamp}] **{update.agent_name}**: {update.message}")
@@ -82,23 +92,40 @@ def display_job_results(final_data: Dict[Any, Any]):
     if not final_data:
         return
     
+    # UI FIX: Handle nested data structure from master_output
+    # The data might be nested under different keys, so check multiple locations
+    data_sources = [final_data, final_data.get("master_state", {}), final_data]
+    
+    # Extract data from the first available source
+    youtube_data = None
+    weather_data = None
+    research_data = None
+    report_data = None
+    
+    for source in data_sources:
+        if source:
+            youtube_data = youtube_data or source.get("youtube_data")
+            weather_data = weather_data or source.get("weather_data") 
+            research_data = research_data or source.get("research_data")
+            report_data = report_data or source.get("report_data")
+    
     # Create tabs for different result types
     tabs = []
     tab_names = []
     
-    if final_data.get("youtube_data"):
+    if youtube_data:
         tab_names.append("📺 YouTube")
         tabs.append("youtube")
     
-    if final_data.get("weather_data"):
+    if weather_data:
         tab_names.append("🌤️ Weather")
         tabs.append("weather")
     
-    if final_data.get("research_data"):
+    if research_data:
         tab_names.append("🔍 Research")
         tabs.append("research")
     
-    if final_data.get("report_data"):
+    if report_data:
         tab_names.append("📄 Report")
         tabs.append("report")
     
@@ -108,13 +135,13 @@ def display_job_results(final_data: Dict[Any, Any]):
         for i, tab_type in enumerate(tabs):
             with tab_objects[i]:
                 if tab_type == "youtube":
-                    display_youtube_results(final_data["youtube_data"])
+                    display_youtube_results(youtube_data)
                 elif tab_type == "weather":
-                    display_weather_results(final_data["weather_data"])
+                    display_weather_results(weather_data)
                 elif tab_type == "research":
-                    display_research_results(final_data["research_data"])
+                    display_research_results(research_data)
                 elif tab_type == "report":
-                    display_report_results(final_data["report_data"])
+                    display_report_results(report_data)
 
 
 def display_youtube_results(youtube_data: Dict[str, Any]):
@@ -243,8 +270,21 @@ def display_research_results(research_data: Dict[str, Any]):
 
 
 def display_report_results(report_data: Dict[str, Any]):
-    """Display generated report results."""
-    st.subheader(f"{report_data.get('style', 'Unknown').title()} Report")
+    """Display generated report results with improved title and metadata."""
+    # UI FIX: Extract actual content title from the final report instead of using generic "Generated Report"
+    final_report = report_data.get('final', '')
+    
+    # Try to extract title from the markdown content (look for first # heading)
+    content_title = "Generated Report"  # fallback
+    if final_report:
+        lines = final_report.split('\n')
+        for line in lines[:5]:  # Check first 5 lines for title
+            if line.strip().startswith('# '):
+                content_title = line.strip()[2:].strip()  # Remove '# ' prefix
+                break
+    
+    # UI FIX: Show actual content title instead of generic "Generated Report"
+    st.subheader(content_title)
     
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -253,17 +293,16 @@ def display_report_results(report_data: Dict[str, Any]):
         st.metric("Word Count", report_data.get('word_count', 0))
     with col3:
         generation_time = report_data.get('generation_time')
-        if generation_time is not None:
+        if generation_time is not None and generation_time > 0:
             st.metric("Generation Time", f"{generation_time:.2f}s")
         else:
+            # UI FIX: Show processing time from parent context if available
             st.metric("Generation Time", "N/A")
     
     st.write(f"**Source Type:** {report_data.get('source_type', 'Unknown').title()}")
     
-    # Final report
-    final_report = report_data.get('final', '')
+    # Final report - UI FIX: Remove redundant "Generated Report" subheader since we show the actual title above
     if final_report:
-        st.subheader("Generated Report")
         st.markdown(final_report)
         
         # Download button

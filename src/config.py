@@ -36,7 +36,7 @@ class Config:
     # Agent-specific model assignments (respects environment variables)
     DEFAULT_MODEL: str = os.getenv('DEFAULT_MODEL', 'gpt-4o-mini')  # Default to efficient model
     ORCHESTRATOR_MODEL: str = os.getenv('ORCHESTRATOR_MODEL', STANDARD_MODEL)  # Complex coordination
-    RESEARCH_MODEL: str = os.getenv('RESEARCH_MODEL', NANO_MODEL)  # Query expansion/parsing  
+    RESEARCH_MODEL: str = os.getenv('RESEARCH_MODEL', 'gpt-4o-mini')  # FIXED: Nano model causes validation failures  
     WEATHER_MODEL: str = os.getenv('WEATHER_MODEL', NANO_MODEL)  # Simple API data processing
     YOUTUBE_MODEL: str = os.getenv('YOUTUBE_MODEL', NANO_MODEL)  # Transcript extraction/processing
     REPORT_MODEL: str = os.getenv('REPORT_MODEL', STANDARD_MODEL)  # Quality reasoning needed

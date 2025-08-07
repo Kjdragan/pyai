@@ -579,9 +579,10 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
             if ctx.deps.state_manager:
                 ctx.deps.state_manager.update_youtube_data(agent_name, youtube_model)
             
-            # Mark as completed to prevent duplication
-            ctx.deps.completed_agents.add(agent_name)
-            ctx.deps.agents_used.append(agent_name)
+            # PERFORMANCE FIX: Mark as completed to prevent duplication - add to agents_used only once
+            if agent_name not in ctx.deps.completed_agents:
+                ctx.deps.completed_agents.add(agent_name)
+                ctx.deps.agents_used.append(agent_name)
             return f"YouTube agent completed successfully. Retrieved transcript with {len(response.data.get('transcript', ''))} characters."
         else:
             ctx.deps.errors.append(response.error)
@@ -643,7 +644,9 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
 async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: str, pipeline: str = "both") -> str:
     """Dispatch job to research agents (Tavily and/or Serper)."""
     try:
-        ctx.deps.agents_used.append("ResearchAgents")
+        # PERFORMANCE FIX: Only add ResearchAgents to agents_used once
+        if "ResearchAgents" not in ctx.deps.agents_used:
+            ctx.deps.agents_used.append("ResearchAgents")
         
         results = []
         
@@ -859,9 +862,10 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
             if ctx.deps.state_manager:
                 ctx.deps.state_manager.update_report_data(agent_name, report_model)
             
-            # Mark as completed to prevent duplication
-            ctx.deps.completed_agents.add(agent_name)
-            ctx.deps.agents_used.append(agent_name)
+            # PERFORMANCE FIX: Mark as completed to prevent duplication - add to agents_used only once
+            if agent_name not in ctx.deps.completed_agents:
+                ctx.deps.completed_agents.add(agent_name)
+                ctx.deps.agents_used.append(agent_name)
             return f"Universal report generated successfully from {len(data_types)} data sources: {len(response.data.get('final', ''))} characters"
         else:
             ctx.deps.errors.append(response.error)

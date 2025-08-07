@@ -9,13 +9,26 @@ from datetime import datetime
 
 
 class YouTubeTranscriptModel(BaseModel):
-    """Model for YouTube transcript data."""
+    """Model for YouTube transcript data - cleaned up model without legacy fields."""
     url: str  # Simplified from HttpUrl to avoid validation issues
     transcript: str
-    metadata: Dict[str, Any]
-    title: Optional[str] = None
-    duration: Optional[str] = None
-    channel: Optional[str] = None
+    metadata: Dict[str, Any]  # All video metadata (title, duration, channel, etc.) stored here
+    
+    # Convenience properties for backward compatibility
+    @property
+    def title(self) -> Optional[str]:
+        """Get title from metadata."""
+        return self.metadata.get('title')
+    
+    @property
+    def duration(self) -> Optional[str]:
+        """Get duration from metadata."""
+        return self.metadata.get('duration')
+    
+    @property
+    def channel(self) -> Optional[str]:
+        """Get channel from metadata."""
+        return self.metadata.get('channel')
 
 
 class YouTubeMetadata(BaseModel):
@@ -52,7 +65,7 @@ class WeatherModel(BaseModel):
 
 
 class ResearchItem(BaseModel):
-    """Individual research result item."""
+    """Individual research result item with content cleaning support."""
     query_variant: str  # e.g. "Historical adoption of X"
     source_url: Optional[str] = None  # Simplified from HttpUrl to avoid validation issues
     title: str
@@ -63,7 +76,11 @@ class ResearchItem(BaseModel):
     content_scraped: bool = False  # Whether full content was successfully scraped
     scraping_error: Optional[str] = None  # Error message if scraping failed
     content_length: Optional[int] = None  # Length of scraped content
-    scraped_content: Optional[str] = None  # Full scraped content (untruncated, for report generation)
+    scraped_content: Optional[str] = None  # Full scraped content (cleaned if processing succeeded)
+    # Content cleaning metadata
+    content_cleaned: Optional[bool] = None  # Whether content cleaning was attempted and succeeded
+    original_content_length: Optional[int] = None  # Length before cleaning
+    cleaned_content_length: Optional[int] = None  # Length after cleaning
 
 
 class ResearchPipelineModel(BaseModel):

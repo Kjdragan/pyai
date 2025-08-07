@@ -11,7 +11,7 @@ Explore the research generation. Is Serper doing a better job or is Tavily doing
 
 Create a report output directory as a sub directory under logs. Make sure that all our final output goes in there.
 
-
+Talk about Arise's new tracing and implemented an additional tracing into this project.
 
 
 
