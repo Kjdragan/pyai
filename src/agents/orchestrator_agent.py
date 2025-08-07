@@ -120,14 +120,14 @@ async def stream_update(update: StreamingUpdate) -> None:
 orchestrator_agent = Agent(
     model=OpenAIModel(config.ORCHESTRATOR_MODEL),
     deps_type=OrchestratorDeps,
-    output_type=MasterOutputModel,
+    output_type=str,  # Return coordination summary, not full MasterOutputModel
     instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are the Orchestrator Agent for a multi-agent system. Your responsibilities:
     
     1. Parse user requests and intelligently extract structured parameters
     2. Coordinate execution using the available tools for each agent type
-    3. Aggregate all results into a comprehensive MasterOutputModel
+    3. Return a summary of coordination results (state is managed externally)
     4. Handle errors gracefully and provide meaningful feedback
     
     INTELLIGENT QUERY PARSING:
@@ -170,7 +170,7 @@ orchestrator_agent = Agent(
     - Set success=False and include detailed error messages
     - Do not attempt to call tools with invalid parameters
     
-    Always return a complete MasterOutputModel with all relevant data populated.
+    Return a brief coordination summary of what was accomplished and any issues encountered.
     """,
     retries=config.MAX_RETRIES
 )
@@ -194,9 +194,9 @@ async def dispatch_to_youtube_agent(ctx: RunContext[OrchestratorDeps], url: str)
                 usage=ctx.usage
             )
             # Convert to AgentResponse format for compatibility
-            # Extract the actual YouTubeTranscriptModel from AgentRunResult
-            if hasattr(youtube_result, 'data') and youtube_result.data:
-                result_data = youtube_result.data.model_dump() if hasattr(youtube_result.data, 'model_dump') else youtube_result.data
+            # Extract the actual YouTubeTranscriptModel from AgentRunResult (use .output not deprecated .data)
+            if hasattr(youtube_result, 'output') and youtube_result.output:
+                result_data = youtube_result.output.model_dump() if hasattr(youtube_result.output, 'model_dump') else youtube_result.output
             else:
                 result_data = youtube_result.model_dump() if hasattr(youtube_result, 'model_dump') else youtube_result
             
@@ -249,9 +249,9 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
                 usage=ctx.usage
             )
             # Convert to AgentResponse format for compatibility
-            # Extract the actual WeatherModel from AgentRunResult
-            if hasattr(weather_result, 'data') and weather_result.data:
-                result_data = weather_result.data.model_dump() if hasattr(weather_result.data, 'model_dump') else weather_result.data
+            # Extract the actual WeatherModel from AgentRunResult (use .output not deprecated .data)
+            if hasattr(weather_result, 'output') and weather_result.output:
+                result_data = weather_result.output.model_dump() if hasattr(weather_result.output, 'model_dump') else weather_result.output
             else:
                 result_data = weather_result.model_dump() if hasattr(weather_result, 'model_dump') else weather_result
             
@@ -302,9 +302,9 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                     usage=ctx.usage
                 )
                 # Convert to AgentResponse format for compatibility
-                # Extract the actual ResearchPipelineModel from AgentRunResult
-                if hasattr(tavily_result, 'data') and tavily_result.data:
-                    result_data = tavily_result.data.model_dump() if hasattr(tavily_result.data, 'model_dump') else tavily_result.data
+                # Extract the actual ResearchPipelineModel from AgentRunResult (use .output not deprecated .data)
+                if hasattr(tavily_result, 'output') and tavily_result.output:
+                    result_data = tavily_result.output.model_dump() if hasattr(tavily_result.output, 'model_dump') else tavily_result.output
                 else:
                     result_data = tavily_result.model_dump() if hasattr(tavily_result, 'model_dump') else tavily_result
                 
@@ -340,9 +340,9 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                     usage=ctx.usage
                 )
                 # Convert to AgentResponse format for compatibility
-                # Extract the actual ResearchPipelineModel from AgentRunResult
-                if hasattr(serper_result, 'data') and serper_result.data:
-                    result_data = serper_result.data.model_dump() if hasattr(serper_result.data, 'model_dump') else serper_result.data
+                # Extract the actual ResearchPipelineModel from AgentRunResult (use .output not deprecated .data)
+                if hasattr(serper_result, 'output') and serper_result.output:
+                    result_data = serper_result.output.model_dump() if hasattr(serper_result.output, 'model_dump') else serper_result.output
                 else:
                     result_data = serper_result.model_dump() if hasattr(serper_result, 'model_dump') else serper_result
                 
@@ -456,8 +456,8 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
             from agents.report_writer_agent import report_writer_agent
             report_result = await report_writer_agent.run(prompt, usage=ctx.usage)
             
-            if hasattr(report_result, 'data') and report_result.data:
-                result_data = report_result.data.model_dump() if hasattr(report_result.data, 'model_dump') else report_result.data
+            if hasattr(report_result, 'output') and report_result.output:
+                result_data = report_result.output.model_dump() if hasattr(report_result.output, 'model_dump') else report_result.output
             else:
                 result_data = report_result.model_dump() if hasattr(report_result, 'model_dump') else report_result
             
@@ -531,6 +531,34 @@ async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdat
         # Update with orchestrator-specific data
         master_output.agents_used.extend(deps.agents_used)
         master_output.success = len(deps.errors) == 0 and master_output.success
+        
+        # VALIDATION: Pre-validate the master output before final processing
+        try:
+            # Test serialization to catch any validation issues early
+            test_data = master_output.model_dump()
+            
+            # Validate specific agent data that commonly causes issues
+            if master_output.youtube_data:
+                # Ensure YouTube data has required metadata field
+                if not master_output.youtube_data.metadata:
+                    yield StreamingUpdate(
+                        update_type="error", 
+                        agent_name="Orchestrator",
+                        message="Warning: YouTube data missing metadata field - populating with defaults"
+                    )
+                    master_output.youtube_data.metadata = {"validation_fix": "empty_metadata_populated"}
+            
+            # Re-validate after any fixes
+            validated_data = master_output.model_dump()
+            
+        except Exception as validation_error:
+            yield StreamingUpdate(
+                update_type="error",
+                agent_name="Orchestrator", 
+                message=f"Validation failed: {str(validation_error)}"
+            )
+            master_output.success = False
+            master_output.errors.append(f"Final validation error: {str(validation_error)}")
         
         # Log the complete master state document
         master_logger = MasterStateLogger()

@@ -101,12 +101,15 @@ youtube_agent = Agent(
 
 
 @youtube_agent.tool
-async def get_youtube_transcript(ctx: RunContext[YouTubeAgentDeps], url: str, languages: str = "en,en-US,en-GB") -> str:
-    """Tool to fetch YouTube transcript from URL with language preferences.
+async def get_youtube_transcript(ctx: RunContext[YouTubeAgentDeps], url: str, languages: str = "en,en-US,en-GB") -> YouTubeTranscriptModel:
+    """Tool to fetch YouTube transcript from URL with language preferences and return structured model.
     
     Args:
-        url: YouTube video URL
+        url: YouTube video URL  
         languages: Comma-separated list of preferred languages (e.g., "en,de,fr")
+    
+    Returns:
+        YouTubeTranscriptModel with complete transcript data and metadata
     """
     try:
         video_id = extract_video_id(url)
@@ -116,18 +119,48 @@ async def get_youtube_transcript(ctx: RunContext[YouTubeAgentDeps], url: str, la
         # Parse language preferences
         language_list = [lang.strip() for lang in languages.split(',')]
         
+        # Fetch transcript with metadata
         transcript, metadata = await fetch_youtube_transcript(video_id, language_list)
         
-        return f"Successfully fetched transcript for video {video_id}:\n" \
-               f"Language: {metadata['language']} ({metadata['language_code']})\n" \
-               f"Type: {'Auto-generated' if metadata['is_generated'] else 'Manual'}\n" \
-               f"Duration: {metadata['duration_seconds']:.1f} seconds\n" \
-               f"Segments: {metadata['segments_count']}\n" \
-               f"Transcript length: {len(transcript)} characters\n\n" \
-               f"Transcript:\n{transcript}"
+        # Fetch additional video metadata using yt-dlp
+        title = None
+        channel = None
+        duration = None
+        
+        try:
+            import yt_dlp
+            
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                title = info.get('title')
+                channel = info.get('uploader')
+                duration_seconds = info.get('duration')
+                duration = str(duration_seconds) if duration_seconds is not None else None
+                
+        except Exception as e:
+            # Continue without additional metadata - transcript metadata is sufficient
+            pass
+        
+        # Create and return structured YouTube transcript model
+        youtube_model = YouTubeTranscriptModel(
+            url=url,
+            transcript=transcript,
+            metadata=metadata,  # This contains the structured transcript metadata
+            title=title,
+            channel=channel,
+            duration=duration
+        )
+        
+        return youtube_model
                
     except Exception as e:
-        return f"Error fetching transcript for {url}: {str(e)}"
+        raise ValueError(f"Error fetching transcript for {url}: {str(e)}")
 
 
 async def process_youtube_request(url: str) -> AgentResponse:

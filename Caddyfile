@@ -1,0 +1,58 @@
+# Caddyfile - Universal PNA Fix Configuration
+# Proxies localhost services with HTTPS and PNA headers
+
+# Main Streamlit app proxy
+localhost:8443 {
+    # Enable TLS with local certificates
+    tls certs/localhost.pem certs/localhost-key.pem
+    
+    # Add PNA headers to allow private network access
+    header {
+        # Allow private network access from public websites
+        Access-Control-Allow-Private-Network true
+        # CORS headers for broader compatibility
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+    }
+    
+    # Proxy to Streamlit app (default port 8501)
+    reverse_proxy localhost:8501 {
+        # Preserve original headers
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    
+    # Enable logging
+    log {
+        output file logs/caddy.log
+        level INFO
+    }
+}
+
+# Alternative port for other services
+localhost:8444 {
+    tls certs/localhost.pem certs/localhost-key.pem
+    
+    header {
+        Access-Control-Allow-Private-Network true
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+    }
+    
+    # Proxy to alternative service (e.g., port 8000, 3000, etc.)
+    reverse_proxy localhost:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-For {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    
+    log {
+        output file logs/caddy.log
+        level INFO
+    }
+}

@@ -1,0 +1,15 @@
+# PNA Fix - SSL Certificates and Logs
+# Add these lines to your .gitignore file
+
+# SSL certificates (contain sensitive data)
+certs/
+*.pem
+*.key
+
+# Caddy logs
+logs/caddy.log
+logs/access.log
+
+# Temporary files
+*.tar.gz
+mkcert-*
