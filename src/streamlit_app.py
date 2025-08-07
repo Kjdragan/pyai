@@ -21,7 +21,7 @@ try:
     # Always initialize logging for Streamlit subprocess
     logging_manager = initialize_logging(
         logs_dir=os.path.join(os.path.dirname(__file__), "logs"),
-        enable_logfire=False  # Disable Logfire in subprocess to avoid conflicts
+        enable_logfire=True  # Enable Logfire in Streamlit subprocess
     )
     
     streamlit_logger = get_logger("streamlit_app")

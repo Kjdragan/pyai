@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from models import (
     ResearchPipelineModel, MasterOutputModel, YouTubeTranscriptModel, 
     WeatherModel, ReportGenerationModel, AgentResponse
@@ -17,12 +17,10 @@ class ResearchDataLogger:
         self.log_dir.mkdir(exist_ok=True)
         
     class PydanticJSONEncoder(json.JSONEncoder):
-        """Custom JSON encoder that handles Pydantic types like HttpUrl and datetime."""
+        """Custom JSON encoder that handles Pydantic types like datetime."""
         def default(self, obj: Any) -> Any:
             if isinstance(obj, datetime):
                 return obj.isoformat()
-            if isinstance(obj, HttpUrl):
-                return str(obj)
             if hasattr(obj, "model_dump"):
                 return obj.model_dump()
             return super().default(obj)
@@ -90,12 +88,10 @@ class MasterStateLogger:
         self.log_dir.mkdir(exist_ok=True)
         
     class PydanticJSONEncoder(json.JSONEncoder):
-        """Custom JSON encoder that handles Pydantic types like HttpUrl and datetime."""
+        """Custom JSON encoder that handles Pydantic types like datetime."""
         def default(self, obj: Any) -> Any:
             if isinstance(obj, datetime):
                 return obj.isoformat()
-            if isinstance(obj, HttpUrl):
-                return str(obj)
             if hasattr(obj, "model_dump"):
                 return obj.model_dump()
             return super().default(obj)

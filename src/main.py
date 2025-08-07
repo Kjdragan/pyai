@@ -18,13 +18,20 @@ run_hygiene_tasks()
 # Load configuration first (this loads .env file)
 from config import config
 
-# Initialize comprehensive logging system AFTER config loading
+# CRITICAL: Initialize Logfire BEFORE importing any agents
 from logging_config import initialize_logging, get_logger
 logging_manager = initialize_logging(
     logs_dir=os.path.join(os.path.dirname(__file__), "logs"),
     enable_logfire=True
 )
+
+# Display Logfire dashboard URL if enabled
+if logging_manager.enable_logfire:
+    print(f"📊 Logfire Dashboard: {logging_manager.get_logfire_dashboard_url()}")
+
 system_logger = get_logger("main")
+
+# NOW import agents after Logfire is configured
 from agents import run_orchestrator_job
 from models import StreamingUpdate
 
@@ -52,9 +59,8 @@ async def main_cli(query: Optional[str] = None):
     
     # Display trace access information
     if logging_manager.enable_logfire:
-        dashboard_url = logging_manager._get_logfire_dashboard_url()
-        if dashboard_url:
-            print(f"🎯 Live traces available at: {dashboard_url}")
+        dashboard_url = logging_manager.get_logfire_dashboard_url()
+        print(f"🎯 Live traces available at: {dashboard_url}")
     print()
     
     # Get query from user if not provided
@@ -195,7 +201,8 @@ def run_streamlit():
             streamlit_path,
             "--server.port", str(config.STREAMLIT_PORT),
             "--server.address", config.STREAMLIT_HOST
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True)
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, universal_newlines=True,
+        env=os.environ.copy())  # CRITICAL: Pass all environment variables to subprocess
         
         # Stream output in real-time
         import threading

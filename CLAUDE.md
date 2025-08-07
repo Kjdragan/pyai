@@ -92,7 +92,7 @@ This is a **Pydantic-AI multi-agent system** with a hub-and-spoke architecture c
 - `.env` file required with `OPENAI_API_KEY` (minimum)
 
 **Logging System:**
-- `logging_config.py`: Comprehensive logging with Logfire integration
+- `logging_config.py`: Comprehensive logging infrastructure
 - Structured JSON logs in `src/logs/` directory
 - Agent execution tracing and performance monitoring
 
@@ -122,7 +122,7 @@ YouTube URLs are extracted using comprehensive regex patterns in `orchestrator_a
 - **Agent Level**: Each agent returns `AgentResponse` with success/error state
 - **Orchestrator Level**: Aggregates partial failures, continues processing
 - **UI Level**: Streams errors as `StreamingUpdate` events
-- **Logging**: Comprehensive error capture with Logfire integration
+- **Logging**: Comprehensive error capture and monitoring
 
 ### Testing Strategy
 
@@ -145,6 +145,6 @@ The system includes automated hygiene tasks (`hygiene.py`) that run on startup:
 - **Pydantic-AI** for agent framework
 - **UV** for dependency management
 - **Streamlit** for web interface
-- **Logfire** for observability (optional but enabled by default)
+- **Structured logging** for observability and monitoring
 
 The system is designed for extensibility - new agents follow the established pattern and register in `agents/__init__.py`.

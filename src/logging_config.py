@@ -18,6 +18,12 @@ from contextlib import contextmanager
 
 from pydantic_ai.agent import InstrumentationSettings
 
+try:
+    import logfire
+    LOGFIRE_AVAILABLE = True
+except ImportError:
+    LOGFIRE_AVAILABLE = False
+
 
 class PydanticAIFormatter(logging.Formatter):
     """Custom formatter for Pydantic AI logs with structured output."""
@@ -114,16 +120,20 @@ class AgentLoggerAdapter(logging.LoggerAdapter):
 class LoggingManager:
     """Central logging manager for the Pydantic AI system."""
     
-    def __init__(self, logs_dir: str = None):
+    def __init__(self, logs_dir: str = None, enable_logfire: bool = True):
         self.logs_dir = Path(logs_dir) if logs_dir else Path(__file__).parent / "logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         
         self.loggers: Dict[str, logging.Logger] = {}
         self.agent_adapters: Dict[str, AgentLoggerAdapter] = {}
-        
+        self.enable_logfire = enable_logfire and LOGFIRE_AVAILABLE
         
         # Setup base logging configuration
         self._setup_base_logging()
+        
+        # Configure Logfire if enabled
+        if self.enable_logfire:
+            self._configure_logfire()
     
     
     
@@ -171,6 +181,36 @@ class LoggingManager:
         root_logger.addHandler(error_handler)
         
         print(f"📝 Logging configured - Files: {log_file.name}, {error_file.name}")
+    
+    def _configure_logfire(self):
+        """Configure Logfire integration."""
+        try:
+            # Configure Logfire with confirmed working network
+            logfire.configure(
+                send_to_logfire=True,  # Network confirmed working
+                console=False,  # Disable console to avoid noise
+                service_name="pyai",  # Set service name for better identification
+                inspect_arguments=False,  # Disable f-string inspection to avoid warnings
+            )
+            
+            # Instrument Pydantic AI for comprehensive tracing
+            logfire.instrument_pydantic_ai()  # Use default settings
+            
+            # Instrument HTTP requests for API call tracing
+            logfire.instrument_httpx(capture_all=True)
+            
+            print("🔥 Logfire integration configured successfully")
+            print(f"📊 Dashboard: https://logfire-us.pydantic.dev/Kjdragan/pyai")
+            
+        except Exception as e:
+            print(f"⚠️ Logfire configuration failed: {e}")
+            print("💡 This might be due to network restrictions (corporate firewall/DNS)")
+            print("📊 Local console tracing enabled as fallback")
+            self.enable_logfire = False
+    
+    def get_logfire_dashboard_url(self) -> str:
+        """Get the Logfire dashboard URL."""
+        return "https://logfire-us.pydantic.dev/Kjdragan/pyai"
     
     def get_logger(self, name: str) -> logging.Logger:
         """Get or create a logger for a specific component."""
@@ -244,10 +284,10 @@ class LoggingManager:
 _logging_manager: Optional[LoggingManager] = None
 
 
-def initialize_logging(logs_dir: str = None) -> LoggingManager:
+def initialize_logging(logs_dir: str = None, enable_logfire: bool = True) -> LoggingManager:
     """Initialize the global logging manager."""
     global _logging_manager
-    _logging_manager = LoggingManager(logs_dir)
+    _logging_manager = LoggingManager(logs_dir, enable_logfire)
     return _logging_manager
 
 

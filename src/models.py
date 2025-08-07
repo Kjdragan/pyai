@@ -3,7 +3,7 @@ Pydantic data models for the multi-agent system.
 All agent I/O is strictly typed via these models.
 """
 
-from pydantic import BaseModel, HttpUrl, Field
+from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Literal, Any
 from datetime import datetime
 
@@ -54,7 +54,7 @@ class WeatherModel(BaseModel):
 class ResearchItem(BaseModel):
     """Individual research result item."""
     query_variant: str  # e.g. "Historical adoption of X"
-    source_url: Optional[HttpUrl] = None
+    source_url: Optional[str] = None  # Simplified from HttpUrl to avoid validation issues
     title: str
     snippet: str  # Original search result snippet (short)
     relevance_score: Optional[float] = None
