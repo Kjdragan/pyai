@@ -22,7 +22,7 @@ from pydantic import HttpUrl
 def create_test_youtube_model():
     """Create a test YouTube transcript model with an HttpUrl."""
     return YouTubeTranscriptModel(
-        url=HttpUrl("https://www.youtube.com/watch?v=test123"),
+        url="https://www.youtube.com/watch?v=test123",
         transcript="This is a test transcript.",
         metadata={
             "video_id": "test123",
@@ -54,7 +54,7 @@ def create_test_research_model():
         results=[
             ResearchItem(
                 query_variant="test sub-query 1",
-                source_url=HttpUrl("https://example.com/1"),
+                source_url="https://example.com/1",
                 title="Test Result 1",
                 snippet="This is test result 1",
                 relevance_score=0.9,
@@ -62,7 +62,7 @@ def create_test_research_model():
             ),
             ResearchItem(
                 query_variant="test sub-query 2",
-                source_url=HttpUrl("https://example.com/2"),
+                source_url="https://example.com/2",
                 title="Test Result 2",
                 snippet="This is test result 2",
                 relevance_score=0.8,
@@ -77,7 +77,7 @@ def create_test_master_output():
         job_request=JobRequest(
             job_type="research",
             query="test query",
-            report_style="concise"
+            report_style="summary"
         ),
         orchestrator_id="test-orchestrator",
         agents_used=["TavilyResearchAgent"],

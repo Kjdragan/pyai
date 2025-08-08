@@ -1,0 +1,43 @@
+{
+  "timestamp": "20250808_091359",
+  "agent_name": "YouTube",
+  "agent_data": {
+    "url": "https://www.youtube.com/watch?v=test123",
+    "transcript": "This is a test transcript.",
+    "metadata": {
+      "video_id": "test123",
+      "language": "en",
+      "language_code": "en",
+      "is_generated": true,
+      "transcript_length": 25,
+      "segments_count": 1,
+      "is_translatable": true,
+      "available_languages": [
+        "en"
+      ],
+      "translation_languages": [
+        {
+          "language": "English",
+          "language_code": "en"
+        }
+      ],
+      "duration_seconds": 120.0,
+      "first_segment_start": 0.0,
+      "last_segment_end": 120.0
+    }
+  },
+  "master_output": {
+    "job_request": {
+      "job_type": "research",
+      "query": "test query",
+      "report_style": "summary"
+    },
+    "orchestrator_id": "test-orchestrator",
+    "agents_used": [
+      "TavilyResearchAgent"
+    ],
+    "success": true,
+    "errors": [],
+    "total_processing_time": 2.0
+  }
+}

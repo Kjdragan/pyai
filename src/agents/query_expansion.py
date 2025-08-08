@@ -8,12 +8,12 @@ scope of the original query.
 
 import asyncio
 from typing import List
-from datetime import datetime
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 
 from config import config
 from models import ResearchPipelineModel
+from utils.time_provider import today_str, current_year
 
 
 class QueryExpansionDeps:
@@ -27,11 +27,13 @@ query_expansion_agent = Agent(
     model=OpenAIModel(config.RESEARCH_MODEL),
     deps_type=QueryExpansionDeps,
     output_type=List[str],
-    system_prompt="""
+    system_prompt=f"""
     You are a query expansion expert that generates diverse sub-questions to fully explore a topic.
     
     Your task is to expand a given query into exactly 3 diverse sub-questions that together 
     capture the full scope and potential intent of the original query.
+    
+    Current date: {today_str()}
     
     Guidelines:
     1. Create sub-questions that explore different dimensions (technical, practical, comparative)
@@ -89,13 +91,27 @@ async def expand_query_to_subquestions(query: str) -> List[str]:
     try:
         # Use the agent to generate sub-questions
         result = await query_expansion_agent.run(query)
-        return result.data
+        subqs = result.output
+        # Basic cleanup to ensure well-formed, unique, non-empty questions
+        cleaned = []
+        seen = set()
+        for q in subqs or []:
+            if not isinstance(q, str):
+                continue
+            sq = q.strip()
+            if not sq:
+                continue
+            if sq.lower() in seen:
+                continue
+            seen.add(sq.lower())
+            cleaned.append(sq)
+        return cleaned[:3]
     except Exception as e:
         # Fallback to deterministic approach if LLM fails
         print(f"⚠️  Query expansion failed, using fallback approach: {e}")
-        current_year = datetime.now().year
+        cy = current_year()
         return [
-            f"{query} - technical aspects, mechanisms, and implementation approaches {current_year}",
-            f"{query} - practical applications, industry adoption, and real-world case studies {current_year}",
-            f"{query} - comparative analysis, limitations, and future challenges {current_year}"
+            f"{query} - technical aspects, mechanisms, and implementation approaches {cy}",
+            f"{query} - practical applications, industry adoption, and real-world case studies {cy}",
+            f"{query} - comparative analysis, limitations, and future challenges {cy}"
         ]

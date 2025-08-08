@@ -77,10 +77,23 @@ class ResearchItem(BaseModel):
     scraping_error: Optional[str] = None  # Error message if scraping failed
     content_length: Optional[int] = None  # Length of scraped content
     scraped_content: Optional[str] = None  # Full scraped content (cleaned if processing succeeded)
+    # Raw content preservation (pre-cleaning)
+    raw_content: Optional[str] = None  # Exact raw scraped text before any cleaning/normalization
+    raw_content_length: Optional[int] = None  # Length of raw scraped text
     # Content cleaning metadata
     content_cleaned: Optional[bool] = None  # Whether content cleaning was attempted and succeeded
     original_content_length: Optional[int] = None  # Length before cleaning
     cleaned_content_length: Optional[int] = None  # Length after cleaning
+    # Garbage filtering pipeline visibility (NEW)
+    pre_filter_content: Optional[str] = None  # Full content before garbage filtering (truncated after processing)
+    pre_filter_content_length: Optional[int] = None  # Character count before filtering
+    post_filter_content: Optional[str] = None  # Content after garbage filtering (if passed)
+    post_filter_content_length: Optional[int] = None  # Character count after filtering
+    garbage_filtered: Optional[bool] = None  # Whether content was identified as garbage
+    filter_reason: Optional[str] = None  # Reason why content was filtered (if applicable)
+    quality_score: Optional[float] = None  # Overall quality score from content filter (0-1)
+    # Quality grading/scraping flags and extra info
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchPipelineModel(BaseModel):

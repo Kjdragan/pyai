@@ -262,6 +262,24 @@ async def clean_research_item_content(research_item, topic: str) -> None:
     get_logger().debug(f"🧹 Starting content cleaning for {source_url}: {original_length} chars")
         
     original_content = research_item.scraped_content
+
+    # Preserve raw content if not already set
+    try:
+        if getattr(research_item, "raw_content", None) in (None, ""):
+            research_item.raw_content = original_content
+            research_item.raw_content_length = original_length
+    except Exception:
+        # Best-effort; don't fail cleaning on attribute issues
+        pass
+
+    # Quote metrics before cleaning
+    def _count_quote_chars(text: str) -> int:
+        if not text:
+            return 0
+        quote_chars = ['"', "'", '“', '”', '‘', '’']
+        return sum(text.count(ch) for ch in quote_chars)
+
+    quote_chars_before = _count_quote_chars(original_content)
     cleaned_content, success = await clean_scraped_content(
         original_content, 
         topic, 
@@ -278,8 +296,26 @@ async def clean_research_item_content(research_item, topic: str) -> None:
     research_item.content_cleaned = success
     research_item.original_content_length = original_length
     research_item.cleaned_content_length = cleaned_length
+
+    # Quote metrics after cleaning
+    quote_chars_after = _count_quote_chars(cleaned_content)
+    try:
+        if not getattr(research_item, "metadata", None):
+            research_item.metadata = {}
+        research_item.metadata.setdefault("quote_metrics", {})
+        research_item.metadata["quote_metrics"].update({
+            "quote_chars_before": quote_chars_before,
+            "quote_chars_after": quote_chars_after,
+            "quote_chars_delta": quote_chars_after - quote_chars_before,
+        })
+    except Exception:
+        # Non-fatal if metadata isn't available
+        pass
     
     # Log performance metrics
     status = "✅ SUCCESS" if success else "❌ FAILED"
-    get_logger().info(f"{status} Content cleaning for {source_url}: {original_length} → {cleaned_length} chars "
-                      f"({reduction_pct:.1f}% reduction) in {processing_time:.2f}s")
+    get_logger().info(
+        f"{status} Content cleaning for {source_url}: {original_length} → {cleaned_length} chars "
+        f"({reduction_pct:.1f}% reduction) in {processing_time:.2f}s | "
+        f"quotes: {quote_chars_before} → {quote_chars_after}"
+    )

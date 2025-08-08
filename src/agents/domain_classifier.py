@@ -183,12 +183,12 @@ class DomainClassificationService:
             "rationale": "Default classification for empty query"
         }
     
-    def get_enhanced_domain_context(self, query: str) -> Dict[str, Any]:
+    async def get_enhanced_domain_context(self, query: str) -> Dict[str, Any]:
         """
         Get enhanced domain context for report generation.
         Replaces both orchestrator intent analysis and report writer domain analysis.
         """
-        classification = self.classify_domain(query)
+        classification = await self.classify_domain(query)
         
         # Enhance with additional context needed for report generation
         return {

@@ -751,24 +751,48 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
 
 @orchestrator_agent.tool
 async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: str, pipeline: str = "both") -> str:
-    """Dispatch job to research agents (Tavily and/or Serper)."""
+    """Dispatch job to research agents (Tavily and/or Serper) with centralized query expansion."""
     try:
         # PERFORMANCE FIX: Only add ResearchAgents to agents_used once
         if "ResearchAgents" not in ctx.deps.agents_used:
             ctx.deps.agents_used.append("ResearchAgents")
         
+        # CRITICAL FIX: Centralize query expansion to prevent duplication
+        # Generate sub-queries once instead of letting each agent create their own
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message="Generating centralized sub-queries to prevent duplication"
+        ))
+        
+        from agents.query_expansion import expand_query_to_subquestions
+        centralized_sub_queries = await expand_query_to_subquestions(query)
+        
+        print(f"🎯 QUERY EXPANSION FIX: Generated {len(centralized_sub_queries)} centralized sub-queries")
+        print(f"📝 Sub-queries: {centralized_sub_queries}")
+        
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Using {len(centralized_sub_queries)} shared sub-queries for both research APIs"
+        ))
+        
         results = []
         
         if pipeline in ["tavily", "both"]:
             try:
-                # Use proper Pydantic AI agent with explicit tool usage prompt
+                # Use proper Pydantic AI agent with explicit tool usage prompt and pre-generated sub-queries
                 from agents.research_tavily_agent import tavily_research_agent, TavilyResearchDeps
                 
                 # Create proper dependencies for the Tavily agent
                 tavily_deps = TavilyResearchDeps()
                 
+                # Include centralized sub-queries in the prompt to prevent agent from generating its own
+                sub_queries_text = "\\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+                
                 tavily_result = await tavily_research_agent.run(
                     f"Use your perform_tavily_research tool to conduct comprehensive research on: {query}. "
+                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\\n{sub_queries_text}\\n"
                     f"Please search for real web sources and return structured results with actual URLs and data.",
                     deps=tavily_deps,
                     usage=ctx.usage
@@ -799,14 +823,18 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         
         if pipeline in ["serper", "both"]:
             try:
-                # Use proper Pydantic AI agent with explicit tool usage prompt
+                # Use proper Pydantic AI agent with explicit tool usage prompt and same pre-generated sub-queries
                 from agents.research_serper_agent import serper_research_agent, SerperResearchDeps
                 
                 # Create proper dependencies for the Serper agent
                 serper_deps = SerperResearchDeps()
                 
+                # Use the same centralized sub-queries for Serper to prevent duplication
+                sub_queries_text = "\\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+                
                 serper_result = await serper_research_agent.run(
                     f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
+                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\\n{sub_queries_text}\\n"
                     f"Please search for real web sources and return structured results with actual URLs and data.",
                     deps=serper_deps,
                     usage=ctx.usage
@@ -840,7 +868,6 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         
         # Aggregate and combine ALL successful research results with cross-API deduplication
         all_research_results = []
-        combined_sub_queries = []
         primary_query = query
         seen_urls = set()  # Track URLs to prevent duplicate scraping across APIs
         duplicate_count = 0
@@ -861,7 +888,7 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                         seen_urls.add(result.source_url)
                     all_research_results.append(result)
                 
-                combined_sub_queries.extend(research_model.sub_queries)
+                # Use centralized sub-queries instead of combining separate ones
                 primary_query = research_model.original_query  # Use last successful query
                 
                 # Store individual pipeline data in centralized state
@@ -871,9 +898,10 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         # Create combined research model with ALL results from ALL pipelines
         if all_research_results:
             print(f"✅ DEDUPLICATION: Prevented {duplicate_count} duplicate URLs from being processed")
+            print(f"🎯 QUERY EXPANSION FIX: Using centralized sub-queries instead of duplicating from each API")
             combined_research = ResearchPipelineModel(
                 original_query=primary_query,
-                sub_queries=list(set(combined_sub_queries)),  # Remove duplicates
+                sub_queries=centralized_sub_queries,  # Use centralized sub-queries to prevent duplication
                 results=all_research_results,
                 pipeline_type="combined_tavily_serper",
                 total_results=len(all_research_results),

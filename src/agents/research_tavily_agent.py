@@ -15,9 +15,10 @@ from bs4 import BeautifulSoup
 
 from models import ResearchPipelineModel, ResearchItem, AgentResponse
 from config import config
-from agents.query_expansion import expand_query_to_subquestions
+from agents.query_expansion import expand_query_to_subquestions as expand_query_to_subquestions_llm
 from agents.content_cleaning_agent import clean_research_item_content
 from agents.quality_grader import quality_grader
+from utils.time_provider import today_str, now
 
 
 class TavilyResearchDeps:
@@ -26,7 +27,7 @@ class TavilyResearchDeps:
         self.api_key = config.TAVILY_API_KEY
         self.timeout = config.RESEARCH_TIMEOUT
         self.max_results = config.MAX_RESEARCH_RESULTS
-        self.current_date = datetime.now().strftime("%Y-%m-%d")
+        self.current_date = today_str()
         self.research_results = []  # Store results for agent access
         self.sub_questions = []     # Store sub-questions for agent access
         self._client = None  # Reusable async client
@@ -49,93 +50,8 @@ class TavilyResearchDeps:
 
 
 async def expand_query_to_subquestions(query: str) -> List[str]:
-    """Expand user query into 3 diverse sub-questions using few-shot examples.
-    
-    This function provides guidance to the LLM for generating sub-questions that cover 
-    different aspects of the original query including technical, practical, comparative, 
-    and contextual dimensions.
-    """
-    current_year = datetime.now().year
-    
-    # Provide clear instructions to the LLM on how to expand the query
-    # The LLM will use these examples as a pattern to follow
-    instructions = f"""
-Expand the query "{query}" into exactly 3 diverse sub-questions that together capture the full scope and potential intent of the original query.
-
-Follow these guidelines:
-1. Create sub-questions that explore different dimensions (technical, practical, comparative)
-2. Ensure sub-questions are specific and searchable
-3. Include the current year ({current_year}) in each sub-question when relevant
-4. Avoid overlapping or redundant questions
-5. Make questions clear and unambiguous
-
-Examples of good query expansions:
-
-Query: "artificial intelligence in healthcare"
-Sub-questions:
-1. What are the current technical implementations and breakthrough AI applications in healthcare diagnostics?
-2. What are the practical benefits and challenges of deploying AI systems in hospitals and clinics?
-3. How do AI healthcare solutions compare to traditional methods in terms of accuracy, cost, and patient outcomes?
-
-Query: "renewable energy adoption"
-Sub-questions:
-1. What technological advances have enabled the recent growth in renewable energy systems?
-2. What economic and policy factors are driving or hindering renewable energy adoption in different regions?
-3. How does the environmental impact of renewable energy compare to fossil fuels across their entire lifecycle?
-
-Query: "remote work productivity"
-Sub-questions:
-1. What tools, technologies, and practices have been shown to improve remote team collaboration?
-2. How do different industries and job types adapt to remote work environments?
-3. What are the long-term effects of remote work on employee well-being and company culture?
-
-Query: "blockchain for supply chain"
-Sub-questions:
-1. What are the technical mechanisms by which blockchain enhances supply chain transparency?
-2. What industries are successfully implementing blockchain supply chain solutions and what benefits have they seen?
-3. What are the limitations, costs, and scalability challenges of blockchain in supply chain management?
-"""
-    
-    # Analyze the query to determine its nature and generate appropriate sub-questions
-    # This is a fallback implementation - in practice, the LLM agent will use the system prompt
-    query_lower = query.lower()
-    
-    # Detect query type and generate contextually appropriate sub-questions
-    if any(product_indicator in query_lower for product_indicator in ['iphone', 'samsung', 'tesla', 'macbook', 'laptop', 'phone', 'car', 'product']):
-        # Product-focused expansion
-        return [
-            f"What are the key features, specifications, and technical details of {query}?",
-            f"How does {query} compare to competitors and alternatives in terms of performance and reviews?",
-            f"What is the pricing, availability, and market reception of {query}?"
-        ]
-    elif any(historical_indicator in query_lower for historical_indicator in ['war', 'revolution', 'fall of', 'rise of', 'history', 'ancient', 'medieval']):
-        # Historical topic expansion
-        return [
-            f"What were the background, causes, and context leading to {query}?",
-            f"What were the key events, timeline, and major developments during {query}?",
-            f"What were the consequences, impact, and long-term effects of {query}?"
-        ]
-    elif any(news_indicator in query_lower for news_indicator in ['2024', '2025', 'latest', 'recent', 'current', 'news', 'breaking']):
-        # Current news/events expansion
-        return [
-            f"What are the latest developments and recent news about {query}?",
-            f"What is the background context and key factors behind {query}?",
-            f"What are the implications, reactions, and potential outcomes of {query}?"
-        ]
-    elif any(business_indicator in query_lower for business_indicator in ['market', 'industry', 'company', 'business', 'economy', 'financial']):
-        # Business/market expansion
-        return [
-            f"What is the current market status and recent performance of {query}?",
-            f"What are the key market dynamics, trends, and competitive factors affecting {query}?",
-            f"What are the future outlook, predictions, and growth prospects for {query}?"
-        ]
-    else:
-        # General adaptive expansion
-        return [
-            f"What are the fundamental concepts, principles, and key aspects of {query}?",
-            f"What are the current applications, implementations, and real-world examples of {query}?",
-            f"What are the latest developments, trends, and future directions for {query}?"
-        ]
+    """Delegate to centralized LLM-based query expansion to ensure high-quality sub-questions."""
+    return await expand_query_to_subquestions_llm(query)
 
 
 async def scrape_url_content(url: str, max_chars: int = 2000) -> str:
@@ -261,11 +177,13 @@ async def search_tavily(
                 title=item.get("title", ""),
                 snippet=basic_snippet,  # Keep original snippet separate
                 relevance_score=score,
-                timestamp=datetime.now(),
+                timestamp=now(),
                 content_scraped=content_scraped,
                 scraping_error=scraping_error,
                 content_length=scraped_content_length,  # Length of scraped content only
-                scraped_content=full_scraped_content  # Full scraped content for report generation
+                scraped_content=full_scraped_content,  # Full scraped content for report generation
+                raw_content=full_scraped_content,  # Preserve exact raw scraped text
+                raw_content_length=scraped_content_length
             )
             results.append(research_item)
         
@@ -314,7 +232,14 @@ def clean_and_format_results(results: List[ResearchItem], original_query: str) -
             content_scraped=item.content_scraped,
             scraping_error=item.scraping_error,
             content_length=item.content_length,
-            scraped_content=cleaned_scraped_content  # Full content for report generation (NOT truncated)
+            scraped_content=cleaned_scraped_content,  # Full content for report generation (NOT truncated)
+            # Preserve raw content and cleaning metadata
+            raw_content=item.raw_content,
+            raw_content_length=item.raw_content_length,
+            content_cleaned=item.content_cleaned,
+            original_content_length=item.original_content_length,
+            cleaned_content_length=item.cleaned_content_length,
+            metadata=item.metadata
         )
         cleaned_results.append(cleaned_item)
     
@@ -330,7 +255,8 @@ tavily_research_agent = Agent(
     system_prompt=f"""
     You are a research coordination agent that processes raw Tavily API data into structured output.
     
-    Current date: {datetime.now().strftime("%Y-%m-%d")}
+    Timezone: America/Chicago (US Central)
+    Current date: {today_str()}
     
     When asked to research something:
     1. Call your perform_tavily_research tool with the exact user query
@@ -415,9 +341,25 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         
         print(f"✅ TAVILY TOOL DEBUG: API key configured")
         
-        # Expand query into sub-questions
-        sub_questions = await expand_query_to_subquestions(query)
-        print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+        # Check if pre-generated sub-queries are provided in the query (centralized approach)
+        # This prevents duplicate query expansion across multiple research APIs
+        import re
+        sub_query_match = re.search(r'Use these pre-generated sub-queries.*?:\n((?:\d+\.\s+.*\n?)+)', query, re.DOTALL)
+        
+        if sub_query_match:
+            # Extract pre-generated sub-queries from orchestrator
+            sub_queries_text = sub_query_match.group(1)
+            sub_questions = []
+            for line in sub_queries_text.strip().split('\n'):
+                if line.strip() and re.match(r'\d+\.\s+', line):
+                    sub_question = re.sub(r'^\d+\.\s+', '', line.strip())
+                    sub_questions.append(sub_question)
+            print(f"🎯 TAVILY TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
+            print(f"📝 Sub-queries: {sub_questions}")
+        else:
+            # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
+            sub_questions = await expand_query_to_subquestions(query)
+            print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
         
         # Get reusable async client
         client = await ctx.deps.get_client()
@@ -453,24 +395,130 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         
         print(f"🔢 TAVILY TOOL DEBUG: Total combined results: {len(all_results)}")
         
-        # PERFORMANCE OPTIMIZATION: Clean scraped content using nano model
-        # This removes boilerplate text before report generation for 40-50% speed improvement
+        # PERFORMANCE OPTIMIZATION: Apply programmatic garbage filtering before expensive LLM cleaning
+        # This prevents wasting compute resources on low-quality content
         scraped_items = [item for item in all_results if item.scraped_content and item.content_scraped]
         if scraped_items:
-            print(f"🧹 Starting content cleaning for {len(scraped_items)} Tavily results")
+            print(f"🗑️  Applying programmatic garbage filtering to {len(scraped_items)} scraped items")
+            
+            # Import and apply content quality filter
+            from utils.content_quality_filter import content_filter
+            
+            filtered_items = []
+            garbage_count = 0
+            
+            for item in scraped_items:
+                # Store pre-filtering content state for visibility
+                item.pre_filter_content = item.scraped_content
+                item.pre_filter_content_length = len(item.scraped_content or "")
+                
+                # Apply quality filtering using comprehensive programmatic analysis
+                should_filter, filter_reason = content_filter.should_filter_content(
+                    content=item.scraped_content,
+                    url=item.source_url or "",
+                    title=item.title or "",
+                    quality_threshold=0.4  # Configurable threshold
+                )
+                
+                # Get detailed quality analysis for insights
+                quality_analysis = content_filter.analyze_content_quality(
+                    content=item.scraped_content,
+                    url=item.source_url or "",
+                    title=item.title or ""
+                )
+                item.quality_score = quality_analysis['overall_quality_score']
+                
+                if should_filter:
+                    garbage_count += 1
+                    print(f"🚮 GARBAGE FILTERED: {item.source_url} - {filter_reason} (Quality: {item.quality_score:.2f})")
+                    
+                    # Mark as filtered with detailed information
+                    item.garbage_filtered = True
+                    item.filter_reason = filter_reason
+                    item.post_filter_content = None  # No content passed filtering
+                    item.post_filter_content_length = 0
+                    item.content_cleaned = False  # Skip expensive LLM cleaning
+                    
+                    # Store filtering metadata for transparency
+                    if not hasattr(item, 'metadata') or not item.metadata:
+                        item.metadata = {}
+                    item.metadata['quality_analysis'] = quality_analysis
+                    item.metadata['filtered_as_garbage'] = True
+                else:
+                    # Content passed filtering
+                    item.garbage_filtered = False
+                    item.filter_reason = None
+                    item.post_filter_content = item.scraped_content
+                    item.post_filter_content_length = len(item.scraped_content or "")
+                    filtered_items.append(item)
+                
+                # PERFORMANCE OPTIMIZATION: Truncate pre-filter content after processing for log efficiency
+                # Keep full content for processing, but truncate stored version to save space
+                if item.pre_filter_content and len(item.pre_filter_content) > 500:
+                    item.pre_filter_content = item.pre_filter_content[:500] + "...[TRUNCATED FOR LOG EFFICIENCY]"
+                    
+            # Generate detailed filtering summary for insights
+            total_pre_filter_chars = sum(item.pre_filter_content_length or 0 for item in all_results if hasattr(item, 'pre_filter_content_length') and item.pre_filter_content_length)
+            total_post_filter_chars = sum(item.post_filter_content_length or 0 for item in filtered_items)
+            chars_filtered = total_pre_filter_chars - total_post_filter_chars
+            filter_efficiency = (chars_filtered / total_pre_filter_chars * 100) if total_pre_filter_chars > 0 else 0
+            
+            print(f"✅ GARBAGE FILTERING SUMMARY:")
+            print(f"   • Filtered {garbage_count}/{len(scraped_items)} items ({garbage_count/len(scraped_items)*100:.1f}%)")
+            print(f"   • Removed {chars_filtered:,} characters ({filter_efficiency:.1f}% reduction)")
+            print(f"   • {len(filtered_items)} quality items proceeding to LLM cleaning")
+            print(f"   • Estimated API cost savings: ${garbage_count * 0.02:.2f} (prevented garbage processing)")
+            
+            scraped_items = filtered_items  # Use only non-garbage items for LLM cleaning
+            
+        # PERFORMANCE OPTIMIZATION: Clean scraped content using batched nano model processing
+        # This removes boilerplate text before report generation with true parallel batch processing
+        if scraped_items:
+            print(f"🧹 Starting BATCHED content cleaning for {len(scraped_items)} Tavily results")
             cleaning_start = asyncio.get_event_loop().time()
             
-            # Create cleaning tasks for parallel processing
-            cleaning_tasks = [
-                clean_research_item_content(item, query)
-                for item in scraped_items
-            ]
+            # Use batched content cleaning for true parallelization
+            from agents.content_cleaning_agent import clean_multiple_contents_batched
+            content_tuples = [(item.scraped_content, query, item.source_url or "unknown") for item in scraped_items]
             
-            # Execute content cleaning in parallel for maximum efficiency
-            await asyncio.gather(*cleaning_tasks, return_exceptions=True)
+            # Execute batched cleaning with real parallel processing
+            cleaned_results = await clean_multiple_contents_batched(content_tuples, batch_size=4)
+            
+            # Apply results back to research items with proper metrics
+            for item, (cleaned_content, success) in zip(scraped_items, cleaned_results):
+                if success:
+                    # Preserve raw content before overwriting
+                    if not getattr(item, 'raw_content', None):
+                        item.raw_content = item.scraped_content
+                        item.raw_content_length = len(item.scraped_content)
+                    
+                    # Update with cleaned content and correct metrics
+                    original_length = len(item.scraped_content)
+                    item.scraped_content = cleaned_content
+                    item.content_cleaned = True
+                    item.original_content_length = original_length
+                    item.cleaned_content_length = len(cleaned_content)
+                    item.content_length = len(cleaned_content)  # Fix: should reflect cleaned length
+                    
+                    # Add quote metrics
+                    def _count_quotes(text):
+                        quote_chars = ['"', "'", '"', '"', ''', ''']
+                        return sum(text.count(ch) for ch in quote_chars)
+                    
+                    if not hasattr(item, 'metadata') or not item.metadata:
+                        item.metadata = {}
+                    item.metadata.setdefault('quote_metrics', {})
+                    item.metadata['quote_metrics'].update({
+                        'quote_chars_before': _count_quotes(item.raw_content or ""),
+                        'quote_chars_after': _count_quotes(cleaned_content),
+                        'quote_chars_delta': _count_quotes(cleaned_content) - _count_quotes(item.raw_content or "")
+                    })
+                else:
+                    item.content_cleaned = False
             
             cleaning_time = asyncio.get_event_loop().time() - cleaning_start
-            print(f"✅ Content cleaning completed in {cleaning_time:.2f}s")
+            success_count = sum(1 for _, success in cleaned_results if success)
+            print(f"✅ BATCHED content cleaning completed: {success_count}/{len(scraped_items)} successful in {cleaning_time:.2f}s")
         else:
             print(f"⏭️ No scraped content to clean from Tavily results")
         

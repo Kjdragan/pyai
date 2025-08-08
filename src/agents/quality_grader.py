@@ -9,6 +9,7 @@ from datetime import datetime
 from urllib.parse import urlparse
 
 from models import ResearchItem
+from utils.time_provider import now
 
 
 class QualityGrader:
@@ -262,15 +263,15 @@ class QualityGrader:
         return min(1.0, overlap)
     
     def _is_recent_content(self, title: str, snippet: str) -> bool:
-        """Detect if content appears to be recent (2024-2025)."""
-        current_year = datetime.now().year
+        """Detect if content appears to be recent (current and previous year)."""
+        current_year = now().year
         text = f"{title} {snippet}".lower()
         
         # Look for current/recent year mentions
         recent_indicators = [
             str(current_year),
-            str(current_year - 1), 
-            'latest', 'recent', 'new', 'current', 'updated', '2025', '2024'
+            str(current_year - 1),
+            'latest', 'recent', 'new', 'current', 'updated'
         ]
         
         return any(indicator in text for indicator in recent_indicators)
