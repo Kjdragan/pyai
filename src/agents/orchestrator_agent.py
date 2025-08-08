@@ -13,7 +13,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from models import (
     JobRequest, MasterOutputModel, StreamingUpdate, AgentResponse,
     YouTubeTranscriptModel, WeatherModel, ResearchPipelineModel, 
-    ReportGenerationModel, ResearchItem
+    ReportGenerationModel, ResearchItem, QueryIntentAnalysis
 )
 from config import config
 from agents.youtube_agent import process_youtube_request
@@ -79,6 +79,101 @@ def extract_youtube_url(text: str) -> str:
             return f"https://www.youtube.com/watch?v={video_id}"
     
     return text  # fallback to original text
+
+
+async def classify_query_intent_llm(user_query: str) -> QueryIntentAnalysis:
+    """Classify user query intent using LLM intelligence instead of regex patterns.
+    
+    This replaces brittle keyword matching with intelligent query understanding.
+    """
+    # Build a specialized query intent classifier using the nano model
+    intent_classifier = Agent(
+        OpenAIModel(config.NANO_MODEL),
+        instrument=True,
+        output_type=QueryIntentAnalysis,
+        system_prompt="""
+        You analyze user queries to determine which agents/services are needed.
+        
+        Classification Guidelines:
+        
+        RESEARCH is needed for:
+        - Questions about topics, trends, developments, news, analysis
+        - Requests for information, facts, data, insights
+        - Market research, competitive analysis, technical details
+        - "Tell me about...", "What are...", "How does...", "Find information..."
+        - Any query seeking factual information not in the conversation
+        
+        YOUTUBE is needed when:
+        - Query contains YouTube URLs (youtube.com, youtu.be, m.youtube.com, etc.)
+        - Extract the full YouTube URL if found
+        
+        WEATHER is needed for:
+        - Weather, temperature, climate, forecast queries
+        - Extract location if mentioned, otherwise leave empty
+        
+        REPORT is needed when:
+        - User requests reports, summaries, documents, analysis
+        - Words like "report", "summary", "write", "document", "analyze"
+        - Or when research results need structured presentation
+        
+        Return structured JSON with confidence scores and rationale.
+        Be generous with research - most information queries benefit from it.
+        """,
+        retries=2
+    )
+    
+    prompt = f"""
+    Analyze this user query and determine which agents are needed:
+    
+    Query: "{user_query}"
+    
+    Consider:
+    - Does this need research/information gathering?
+    - Contains YouTube URLs?
+    - Asking about weather/climate?
+    - Requesting a report or structured output?
+    
+    Return analysis with confidence scores and brief rationale.
+    """
+    
+    try:
+        result = await intent_classifier.run(prompt)
+        return result.data if hasattr(result, 'data') and result.data else create_fallback_analysis(user_query)
+    except Exception as e:
+        print(f"LLM intent classification failed: {e}, using fallback")
+        return create_fallback_analysis(user_query)
+
+
+def create_fallback_analysis(user_query: str) -> QueryIntentAnalysis:
+    """Fallback heuristic analysis if LLM classification fails."""
+    query_lower = user_query.lower()
+    
+    # Extract YouTube URL
+    youtube_url = extract_youtube_url(user_query)
+    
+    # Basic weather detection
+    weather_location = None
+    if any(word in query_lower for word in ["weather", "temperature", "forecast", "climate"]):
+        # Simple location extraction
+        words = user_query.split()
+        for i, word in enumerate(words):
+            if word.lower() in ["weather", "in", "for"] and i + 1 < len(words):
+                potential_location = words[i + 1].strip(".,!?")
+                if len(potential_location) > 2:
+                    weather_location = potential_location
+                    break
+    
+    return QueryIntentAnalysis(
+        needs_research=True,  # Default to research for most queries
+        needs_youtube=bool(youtube_url),
+        needs_weather=bool(weather_location),
+        needs_report=any(word in query_lower for word in ["report", "summary", "write", "document", "analyze"]),
+        confidence_score=0.7,  # Moderate confidence for heuristic
+        research_rationale="Fallback heuristic analysis - defaulting to research",
+        youtube_url=youtube_url if youtube_url else None,
+        weather_location=weather_location,
+        query_complexity="moderate"
+    )
 
 
 def parse_job_request(user_input: str) -> JobRequest:
@@ -149,7 +244,8 @@ orchestrator_agent = Agent(
     - dispatch_to_youtube_agent: Pass the NORMALIZED YouTube URL, not the raw query
     - dispatch_to_weather_agent: Pass the extracted location
     - dispatch_to_research_agents: Pass refined search terms
-    - dispatch_to_report_writer: For generating reports from collected data
+    - dispatch_to_intelligent_report_writer: For generating adaptive, high-quality reports from collected data
+    - dispatch_to_report_writer: Legacy report writer (maintained for compatibility)
     
     INTELLIGENT QUERY PARSING:
     When you receive a user query, you must intelligently extract and normalize relevant parameters:
@@ -311,11 +407,16 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     """
     import asyncio
     
-    # Analyze what agents are needed based on query
-    needs_youtube = "youtube.com" in user_query or "youtu.be" in user_query
-    needs_weather = any(word in user_query.lower() for word in ["weather", "temperature", "forecast", "climate"])
-    needs_research = any(word in user_query.lower() for word in ["research", "search", "find", "investigate", "analyze", "latest", "developments", "trends", "news", "get", "information", "about", "energy", "technology", "industry", "market"])
-    needs_report = any(word in user_query.lower() for word in ["report", "summary", "analyze", "write", "document"])
+    # Analyze what agents are needed using LLM intelligence instead of regex patterns
+    intent_analysis = await classify_query_intent_llm(user_query)
+    needs_youtube = intent_analysis.needs_youtube
+    needs_weather = intent_analysis.needs_weather
+    needs_research = intent_analysis.needs_research
+    needs_report = intent_analysis.needs_report
+    
+    print(f"🧠 LLM Intent Analysis: Research={needs_research}, YouTube={needs_youtube}, Weather={needs_weather}, Report={needs_report}, Confidence={intent_analysis.confidence_score:.2f}")
+    if intent_analysis.research_rationale:
+        print(f"📝 Research rationale: {intent_analysis.research_rationale}")
     
     await stream_update(StreamingUpdate(
         update_type="status",
@@ -328,21 +429,25 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     phase1_names = []
     
     if needs_youtube and "YouTubeAgent" not in ctx.deps.completed_agents:
-        url = extract_youtube_url(user_query)
+        # Use LLM-extracted URL or fallback to pattern matching
+        url = intent_analysis.youtube_url or extract_youtube_url(user_query)
         if url:
             phase1_tasks.append(dispatch_to_youtube_agent(ctx, url))
             phase1_names.append("YouTube")
     
     if needs_weather and "WeatherAgent" not in ctx.deps.completed_agents:
-        # Simple location extraction - in production this would be more sophisticated
-        location = "New York"  # Default
-        words = user_query.split()
-        for i, word in enumerate(words):
-            if word.lower() in ["weather", "in", "for"] and i + 1 < len(words):
-                potential_location = words[i + 1].strip(".,!?")
-                if len(potential_location) > 2:  # Basic validation
-                    location = potential_location
-                    break
+        # Use LLM-extracted location or fallback to heuristic extraction
+        location = intent_analysis.weather_location
+        if not location:
+            # Fallback location extraction
+            location = "New York"  # Default
+            words = user_query.split()
+            for i, word in enumerate(words):
+                if word.lower() in ["weather", "in", "for"] and i + 1 < len(words):
+                    potential_location = words[i + 1].strip(".,!?")
+                    if len(potential_location) > 2:
+                        location = potential_location
+                        break
         phase1_tasks.append(dispatch_to_weather_agent(ctx, location))
         phase1_names.append("Weather")
     
@@ -379,11 +484,15 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
         ))
         
         try:
-            report_result = await dispatch_to_report_writer(ctx, user_query, "comprehensive")
+            # Determine quality level based on query complexity
+            quality_level = "enhanced" if "comprehensive" in user_query.lower() else "standard"
+            report_result = await dispatch_to_intelligent_report_writer(
+                ctx, user_query, "comprehensive", quality_level
+            )
             phase2_result = f" -> {report_result}"
         except Exception as e:
-            phase2_result = f" -> Report generation failed: {str(e)}"
-            ctx.deps.errors.append(f"Phase 2 Report: {str(e)}")
+            phase2_result = f" -> Intelligent report generation failed: {str(e)}"
+            ctx.deps.errors.append(f"Phase 2 Intelligent Report: {str(e)}")
     
     # Summary
     total_success = sum(1 for result in phase1_results if not isinstance(result, Exception))
@@ -787,9 +896,14 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
 
 
 @orchestrator_agent.tool
-async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: str, style: str = "summary") -> str:
-    """Dispatch job to Report Writer agent with universal data approach."""
-    agent_name = "ReportWriterAgent"
+async def dispatch_to_intelligent_report_writer(
+    ctx: RunContext[OrchestratorDeps], 
+    query: str, 
+    style: str = "summary",
+    quality_level: str = "standard"
+) -> str:
+    """Dispatch job to Intelligent Report Writer with adaptive templates and quality control."""
+    agent_name = "IntelligentReportWriter"
     
     # Check if this agent has already been completed successfully
     if agent_name in ctx.deps.completed_agents:
@@ -798,9 +912,9 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
             await stream_update(StreamingUpdate(
                 update_type="status",
                 agent_name="Orchestrator",
-                message=f"Using cached report writer result"
+                message=f"Using cached intelligent report writer result"
             ))
-            return f"Report Writer already completed (cached). Report length: {len(cached_result.get('data', {}).get('final', ''))} characters."
+            return f"Intelligent Report Writer already completed (cached). Report length: {len(cached_result.get('data', {}).get('final', ''))} characters."
     
     try:
         # Get unified data package from state manager
@@ -809,61 +923,41 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
             universal_data = ctx.deps.state_manager.get_universal_report_data()
         
         if not universal_data or not universal_data.has_data():
-            return "Error: No data available for report generation"
+            return "Error: No data available for intelligent report generation"
         
-        # Build comprehensive prompt with all available data
-        data_types = universal_data.get_data_types()
-        primary_content = universal_data.get_primary_content()
+        # Analyze query complexity to determine quality level if not specified
+        if quality_level == "auto":
+            query_lower = query.lower()
+            if any(word in query_lower for word in ["comprehensive", "detailed", "thorough", "analysis"]):
+                quality_level = "enhanced"
+            elif any(word in query_lower for word in ["executive", "strategic", "leadership", "premium"]):
+                quality_level = "premium"
+            else:
+                quality_level = "standard"
         
-        prompt = f"Generate a {style} report analyzing the following data:\\n\\n"
-        prompt += f"Data Sources Available: {', '.join(data_types)}\\n"
-        prompt += f"User Query: {universal_data.query}\\n\\n"
-        
-        # Add section-by-section data
-        if universal_data.youtube_data:
-            prompt += f"YOUTUBE DATA:\\n"
-            prompt += f"Title: {universal_data.youtube_data.title or 'Unknown'}\\n"
-            prompt += f"URL: {universal_data.youtube_data.url}\\n"
-            prompt += f"Duration: {universal_data.youtube_data.duration or 'Unknown'}\\n"
-            prompt += f"Channel: {universal_data.youtube_data.channel or 'Unknown'}\\n"
-            prompt += f"Transcript ({len(universal_data.youtube_data.transcript)} chars):\\n{universal_data.youtube_data.transcript[:3000]}...\\n\\n"
-        
-        if universal_data.research_data:
-            prompt += f"RESEARCH DATA:\\n"
-            prompt += f"Query: {universal_data.research_data.original_query}\\n"
-            prompt += f"Results: {universal_data.research_data.total_results}\\n"
-            for i, result in enumerate(universal_data.research_data.results[:5], 1):
-                prompt += f"{i}. {result.title}: {result.snippet}\\n"
-            prompt += "\\n"
-        
-        if universal_data.weather_data:
-            prompt += f"WEATHER DATA:\\n{universal_data.weather_data}\\n\\n"
-        
-        prompt += f"Create a {style} report with distinct sections for each data source and quantified insights."
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Generating {style} {quality_level}-quality report from {len(universal_data.get_data_types())} data sources"
+        ))
         
         try:
-            from agents.report_writer_agent import report_writer_agent
-            report_result = await report_writer_agent.run(prompt, usage=ctx.usage)
+            # Use new intelligent report generation system
+            from agents.report_writer_agent import process_intelligent_report_request
             
-            if hasattr(report_result, 'output') and report_result.output:
-                result_data = report_result.output.model_dump() if hasattr(report_result.output, 'model_dump') else report_result.output
-            else:
-                result_data = report_result.model_dump() if hasattr(report_result, 'model_dump') else report_result
-            
-            response = AgentResponse(
-                agent_name=agent_name,
-                success=True,
-                data=result_data,
-                error=None
+            response = await process_intelligent_report_request(
+                universal_data=universal_data,
+                style=style,
+                quality_level=quality_level
             )
         except Exception as e:
             response = AgentResponse(
-                agent_name=agent_name, 
+                agent_name=agent_name,
                 success=False,
                 data={},
                 error=str(e)
             )
-            ctx.deps.errors.append(f"Report Writer: {str(e)}")
+            ctx.deps.errors.append(f"Intelligent Report Writer: {str(e)}")
         
         # Cache the result regardless of success/failure
         ctx.deps.agent_results[agent_name] = {
@@ -873,22 +967,39 @@ async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: st
         }
         
         if response.success:
-            report_model = ReportGenerationModel(**response.data)
+            # Store in state manager
             if ctx.deps.state_manager:
+                from models import ReportGenerationModel
+                report_model = ReportGenerationModel(**response.data)
                 ctx.deps.state_manager.update_report_data(agent_name, report_model)
             
-            # PERFORMANCE FIX: Mark as completed to prevent duplication - add to agents_used only once
+            # PERFORMANCE FIX: Mark as completed to prevent duplication
             if agent_name not in ctx.deps.completed_agents:
                 ctx.deps.completed_agents.add(agent_name)
                 ctx.deps.agents_used.append(agent_name)
-            return f"Universal report generated successfully from {len(data_types)} data sources: {len(response.data.get('final', ''))} characters"
+            
+            data_types = universal_data.get_data_types()
+            word_count = response.data.get('word_count', 0)
+            processing_time = response.processing_time or 0
+            
+            return f"Intelligent {style} report generated successfully! Quality: {quality_level}, " \
+                   f"Sources: {', '.join(data_types)}, Length: {word_count} words, " \
+                   f"Time: {processing_time:.1f}s"
         else:
             ctx.deps.errors.append(response.error)
-            return f"Report Writer failed: {response.error}"
+            return f"Intelligent Report Writer failed: {response.error}"
         
     except Exception as e:
         ctx.deps.errors.append(str(e))
-        return f"Error in universal report dispatch: {str(e)}"
+        return f"Error in intelligent report dispatch: {str(e)}"
+
+
+# Legacy function maintained for backward compatibility
+@orchestrator_agent.tool
+async def dispatch_to_report_writer(ctx: RunContext[OrchestratorDeps], query: str, style: str = "summary") -> str:
+    """Legacy Report Writer dispatch - maintained for backward compatibility."""
+    # Use new intelligent system with standard quality
+    return await dispatch_to_intelligent_report_writer(ctx, query, style, "standard")
 
 
 async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdate, None]:

@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from models import ResearchPipelineModel, ResearchItem, AgentResponse
 from config import config
 from agents.content_cleaning_agent import clean_research_item_content
+from agents.quality_grader import quality_grader
 
 
 class SerperResearchDeps:
@@ -182,49 +183,61 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
             data = response.json()
             results = []
             
-            # Process organic results with URL scraping
-            for item in data.get("organic", [])[:max_results]:
+            # Process organic results with intelligent quality grading
+            raw_results = []
+            for i, item in enumerate(data.get("organic", [])[:max_results]):
                 basic_snippet = item.get("snippet", "")
                 source_url = item.get("link", "")
                 
-                # Prepare scraping variables
-                content_scraped = False
-                scraping_error = None
-                full_scraped_content = None
-                scraped_content_length = 0
-                
-                print(f"🔍 SERPER DEBUG: Checking scraping for {source_url}")
-                # Attempt to scrape content for high-relevance results
-                if source_url:
-                    print(f"🚀 SERPER DEBUG: Attempting to scrape {source_url}")
-                    scraped_content = await scrape_url_content(source_url, max_chars=10000)  # Much higher limit for full content
-                    if scraped_content:
-                        full_scraped_content = scraped_content
-                        content_scraped = True
-                        scraped_content_length = len(scraped_content)
-                        print(f"✅ SERPER DEBUG: Successfully scraped {scraped_content_length} chars from {source_url}, content_scraped={content_scraped}")
-                    else:
-                        scraping_error = "Failed to scrape content"
-                        print(f"❌ SERPER DEBUG: Failed to scrape content from {source_url}, scraping_error={scraping_error}")
-                else:
-                    scraping_error = "No URL provided"
-                    print(f"⏭️ SERPER DEBUG: No URL to scrape")
-                
+                # Create initial research item for quality evaluation (no scraping yet)
                 result = ResearchItem(
                     query_variant=query,
                     source_url=source_url,
                     title=item.get("title", ""),
-                    snippet=basic_snippet,  # Keep original snippet separate
-                    relevance_score=0.9,  # Serper provides high-quality results
+                    snippet=basic_snippet,
+                    relevance_score=None,  # Will be calculated by quality grader
                     timestamp=datetime.now(),
-                    content_scraped=content_scraped,
-                    scraping_error=scraping_error,
-                    content_length=scraped_content_length,  # Length of scraped content only
-                    scraped_content=full_scraped_content  # Full scraped content for report generation
+                    content_scraped=False,
+                    scraping_error=None,
+                    content_length=0,
+                    scraped_content=None
                 )
-                results.append(result)
+                raw_results.append(result)
             
-            return results
+            # Apply intelligent quality grading to determine what to scrape
+            print(f"📊 SERPER DEBUG: Applying quality grading to {len(raw_results)} results")
+            graded_results = quality_grader.grade_result_batch(
+                raw_results, query, "serper", max_scrape_count=config.MAX_SCRAPING_PER_QUERY
+            )
+            
+            # Now perform selective scraping based on quality grades
+            final_results = []
+            for result in graded_results:
+                should_scrape = result.metadata.get('should_scrape', False)
+                
+                if should_scrape and result.source_url:
+                    print(f"🚀 SERPER DEBUG: High-quality result - scraping {result.source_url} (score: {result.relevance_score:.2f})")
+                    scraped_content = await scrape_url_content(result.source_url, max_chars=10000)
+                    
+                    if scraped_content:
+                        result.scraped_content = scraped_content
+                        result.content_scraped = True
+                        result.content_length = len(scraped_content)
+                        print(f"✅ SERPER DEBUG: Successfully scraped {result.content_length} chars from {result.source_url}")
+                    else:
+                        result.scraping_error = "Failed to scrape content"
+                        print(f"❌ SERPER DEBUG: Failed to scrape content from {result.source_url}")
+                else:
+                    skip_reason = result.metadata.get('skip_reason', 'Quality threshold not met')
+                    print(f"⏭️  SERPER DEBUG: Skipping scraping for {result.source_url} - {skip_reason}")
+                
+                final_results.append(result)
+            
+            # Log quality summary
+            quality_summary = quality_grader.get_quality_summary(final_results)
+            print(f"📈 SERPER QUALITY SUMMARY: {quality_summary}")
+            
+            return final_results
             
     except Exception as e:
         print(f"Serper search error for '{query}': {str(e)}")
@@ -373,9 +386,10 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         sub_questions = await expand_query_to_subquestions(query)
         print(f"📝 SERPER TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
         
-        # Perform parallel searches with rate limiting
+        # Perform parallel searches with full result capacity per sub-query
+        # This allows comprehensive research coverage instead of artificially limiting results
         search_tasks = [
-            search_serper(question, ctx.deps.api_key, max(1, ctx.deps.max_results // len(sub_questions)))
+            search_serper(question, ctx.deps.api_key, ctx.deps.max_results)
             for question in sub_questions
         ]
         

@@ -40,19 +40,23 @@ class Config:
     WEATHER_MODEL: str = os.getenv('WEATHER_MODEL', NANO_MODEL)  # Simple API data processing
     YOUTUBE_MODEL: str = os.getenv('YOUTUBE_MODEL', NANO_MODEL)  # Transcript extraction/processing
     REPORT_MODEL: str = os.getenv('REPORT_MODEL', STANDARD_MODEL)  # Quality reasoning needed
+    # Domain classifier mode: 'llm' (default) or 'heuristic'
+    DOMAIN_CLASSIFIER_MODE: str = os.getenv('DOMAIN_CLASSIFIER_MODE', 'llm')
     
     # Agent Settings
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
     REQUEST_TIMEOUT: int = int(os.getenv("REQUEST_TIMEOUT", "30"))
     
     # Research Settings
-    MAX_RESEARCH_RESULTS: int = int(os.getenv("MAX_RESEARCH_RESULTS", "10"))
+    MAX_RESEARCH_RESULTS: int = int(os.getenv("MAX_RESEARCH_RESULTS", "15"))  # Increased for more comprehensive research  
+    MAX_SCRAPING_PER_QUERY: int = int(os.getenv("MAX_SCRAPING_PER_QUERY", "8"))  # Limit expensive scraping operations
     RESEARCH_TIMEOUT: int = int(os.getenv("RESEARCH_TIMEOUT", "60"))
     
     # Tavily-specific Settings
     TAVILY_TIME_RANGE: str = os.getenv("TAVILY_TIME_RANGE", "month")
     TAVILY_SEARCH_DEPTH: str = os.getenv("TAVILY_SEARCH_DEPTH", "advanced")
     TAVILY_MIN_SCORE: float = float(os.getenv("TAVILY_MIN_SCORE", "0.5"))
+    TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.75"))  # Only scrape high-quality results
     TAVILY_RATE_LIMIT_RPS: int = int(os.getenv("TAVILY_RATE_LIMIT_RPS", "5"))
     
     # Streamlit Settings

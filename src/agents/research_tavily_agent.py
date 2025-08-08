@@ -17,6 +17,7 @@ from models import ResearchPipelineModel, ResearchItem, AgentResponse
 from config import config
 from agents.query_expansion import expand_query_to_subquestions
 from agents.content_cleaning_agent import clean_research_item_content
+from agents.quality_grader import quality_grader
 
 
 class TavilyResearchDeps:
@@ -235,7 +236,9 @@ async def search_tavily(
             scraped_content_length = 0
             
             print(f"🔍 DEBUG: Checking scraping for {url} with score {score}")
-            if url and score > 0.5:  # Lower threshold to scrape more results
+            # Use quality-based scraping decision instead of fixed threshold
+            should_scrape = url and score >= config.TAVILY_SCRAPING_THRESHOLD
+            if should_scrape:
                 print(f"🚀 DEBUG: Attempting to scrape {url}")
                 scraped_content = await scrape_url_content(url, max_chars=10000)  # Much higher limit for full content
                 if scraped_content:
@@ -249,7 +252,8 @@ async def search_tavily(
                     scraping_error = "Failed to scrape content"
                     print(f"❌ DEBUG: Failed to scrape content from {url}, scraping_error={scraping_error}")
             else:
-                print(f"⏭️  DEBUG: Skipping scraping for {url} (score {score} <= 0.5 or no URL)")
+                threshold = config.TAVILY_SCRAPING_THRESHOLD
+                print(f"⏭️  DEBUG: Skipping scraping for {url} (score {score:.2f} < {threshold} threshold or no URL)")
             
             research_item = ResearchItem(
                 query_variant=query,
@@ -267,6 +271,12 @@ async def search_tavily(
         
         # Sort by relevance score (best practice)
         results.sort(key=lambda x: x.relevance_score or 0, reverse=True)
+        
+        # Log quality summary for this search
+        if results:
+            scraped_count = sum(1 for r in results if r.content_scraped)
+            avg_score = sum(r.relevance_score for r in results if r.relevance_score) / len([r for r in results if r.relevance_score])
+            print(f"📈 TAVILY QUALITY: {len(results)} results, avg score: {avg_score:.2f}, {scraped_count} scraped ({scraped_count/len(results)*100:.1f}%)")
         
         return results
         
@@ -422,7 +432,7 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
                 search_tavily(
                     client, 
                     question, 
-                    max(1, ctx.deps.max_results // len(sub_questions)),
+                    ctx.deps.max_results,  # Full result capacity per sub-query for comprehensive coverage
                     time_range=config.TAVILY_TIME_RANGE,  # Configurable time range
                     exclude_domains=["pinterest.com", "quora.com"]  # Filter low-quality domains
                 )

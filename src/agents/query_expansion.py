@@ -66,6 +66,7 @@ query_expansion_agent = Agent(
     2. What industries are successfully implementing blockchain supply chain solutions and what benefits have they seen?
     3. What are the limitations, costs, and scalability challenges of blockchain in supply chain management?
     """,
+    instrument=True,  # Enable Pydantic AI tracing
     retries=config.MAX_RETRIES
 )
 

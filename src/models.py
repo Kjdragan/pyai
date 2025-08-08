@@ -94,14 +94,21 @@ class ResearchPipelineModel(BaseModel):
 
 
 class ReportGenerationModel(BaseModel):
-    """Report generation output."""
-    style: Literal["comprehensive", "top_10", "summary"]
+    """Enhanced report generation output with quality control and multi-source support."""
+    style: Literal["comprehensive", "executive", "top_10", "summary", "technical"]
     prompt_template: str
     draft: str
     final: str  # after synthesis + edit loop
-    source_type: Literal["research", "youtube"]
+    source_type: Literal["research", "youtube", "weather", "multi_source"]
     word_count: Optional[int] = None
     generation_time: Optional[float] = None
+    
+    # Enhanced fields for intelligent reporting
+    quality_level: Optional[Literal["standard", "enhanced", "premium"]] = "standard"
+    domain_context: Optional[Dict[str, Any]] = None
+    confidence_score: Optional[float] = None  # Overall confidence in report accuracy
+    data_sources_count: Optional[int] = None
+    enhancement_applied: Optional[bool] = False
 
 class UniversalReportData(BaseModel):
     """Universal data container for report generation - can handle any combination of data sources."""
@@ -137,6 +144,31 @@ class UniversalReportData(BaseModel):
             return f"Weather data for query: {self.query}"
         else:
             return f"General information about: {self.query}"
+
+
+class DomainAnalysis(BaseModel):
+    """Structured output for query domain analysis (LLM or heuristic)."""
+    domain: Literal["technology", "business", "science", "news", "historical", "educational", "general"]
+    domain_confidence: float
+    complexity: Literal["low", "moderate", "high"]
+    intent: Literal["informational", "instructional", "comparative", "predictive", "evaluative"]
+    query_length: int
+    technical_terms: int
+    secondary_domains: Optional[List[Dict[str, Any]]] = None  # e.g., [{"name": "business", "confidence": 0.3}]
+    rationale: Optional[str] = None
+
+
+class QueryIntentAnalysis(BaseModel):
+    """Structured output for query intent analysis to determine which agents are needed."""
+    needs_research: bool
+    needs_youtube: bool  
+    needs_weather: bool
+    needs_report: bool
+    confidence_score: float  # 0.0-1.0 overall confidence in classification
+    research_rationale: Optional[str] = None  # Why research is/isn't needed
+    youtube_url: Optional[str] = None  # Extracted YouTube URL if found
+    weather_location: Optional[str] = None  # Extracted location if weather is needed
+    query_complexity: Literal["simple", "moderate", "complex"] = "moderate"
 
 
 class JobRequest(BaseModel):

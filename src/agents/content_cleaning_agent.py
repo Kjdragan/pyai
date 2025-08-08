@@ -121,11 +121,116 @@ async def clean_scraped_content(
         return content, False
 
 
+async def clean_multiple_contents_batched(
+    content_items: list[tuple[str, str, str]], 
+    batch_size: int = 4
+) -> list[tuple[str, bool]]:
+    """
+    Clean multiple scraped contents using batch API calls for 4x speedup.
+    
+    Args:
+        content_items: List of (content, topic, source_url) tuples
+        batch_size: Number of items to process per API call
+    
+    Returns:
+        List of (cleaned_content, success_flag) tuples in same order
+    """
+    if not content_items:
+        return []
+    
+    get_logger().info(f"🧹 Starting batched cleaning of {len(content_items)} items (batch_size={batch_size})")
+    start_time = asyncio.get_event_loop().time()
+    
+    # Process items in batches
+    all_results = []
+    for i in range(0, len(content_items), batch_size):
+        batch = content_items[i:i+batch_size]
+        batch_results = await _process_content_batch(batch)
+        all_results.extend(batch_results)
+    
+    total_time = asyncio.get_event_loop().time() - start_time
+    success_count = sum(1 for _, success in all_results if success)
+    
+    get_logger().info(f"✅ Batched cleaning completed: {success_count}/{len(content_items)} successful in {total_time:.2f}s")
+    return all_results
+
+
+async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tuple[str, bool]]:
+    """Process a batch of content items in a single API call."""
+    if len(batch) == 1:
+        # Single item - use regular cleaning
+        content, topic, source_url = batch[0]
+        return [await clean_scraped_content(content, topic, source_url)]
+    
+    # Multi-item batch processing
+    batch_prompt = _create_batch_prompt(batch)
+    
+    try:
+        result = await content_cleaning_agent.run(batch_prompt)
+        cleaned_contents = _parse_batch_response(result.data, len(batch))
+        
+        # Validate and return results
+        results = []
+        for i, (original_content, topic, source_url) in enumerate(batch):
+            if i < len(cleaned_contents) and cleaned_contents[i].strip():
+                cleaned = cleaned_contents[i].strip()
+                results.append((cleaned, True))
+                
+                # Log metrics
+                reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
+                get_logger().info(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
+            else:
+                # Fallback to original content
+                results.append((original_content, False))
+                get_logger().error(f"❌ Batch cleaning failed for {source_url}, using original")
+        
+        return results
+        
+    except Exception as e:
+        get_logger().error(f"❌ Batch processing failed: {e}, falling back to individual processing")
+        
+        # Fallback to individual processing
+        individual_results = []
+        for content, topic, source_url in batch:
+            individual_results.append(await clean_scraped_content(content, topic, source_url))
+        return individual_results
+
+
+def _create_batch_prompt(batch: list[tuple[str, str, str]]) -> str:
+    """Create batch prompt for multiple content items."""
+    prompt_parts = [
+        "Clean the following web-scraped content items. For each item, remove boilerplate, navigation, ads, and irrelevant text.",
+        "Return the cleaned content for each item separated by '---ITEM-SEPARATOR---'.",
+        f"Process {len(batch)} items in order:\n"
+    ]
+    
+    for i, (content, topic, source_url) in enumerate(batch, 1):
+        prompt_parts.append(f"ITEM {i} - Topic: {topic}")
+        prompt_parts.append(f"Source: {source_url}")
+        prompt_parts.append(f"Content:\n{content[:5000]}...")  # Limit content per item
+        prompt_parts.append("")
+    
+    prompt_parts.append("Return only the cleaned content for each item, separated by '---ITEM-SEPARATOR---'.")
+    return "\n".join(prompt_parts)
+
+
+def _parse_batch_response(response: str, expected_count: int) -> list[str]:
+    """Parse batch response into individual cleaned contents."""
+    if "---ITEM-SEPARATOR---" not in response:
+        # Single response - split by rough estimation
+        parts = response.split("\n\n")
+        return parts[:expected_count] if len(parts) >= expected_count else [response]
+    
+    # Split by separator
+    parts = response.split("---ITEM-SEPARATOR---")
+    return [part.strip() for part in parts[:expected_count]]
+
+
 async def clean_multiple_contents(
     content_items: list[tuple[str, str, str]]
 ) -> list[tuple[str, bool]]:
     """
-    Clean multiple scraped contents in parallel for efficiency.
+    Clean multiple scraped contents - now uses batched processing by default.
     
     Args:
         content_items: List of (content, topic, source_url) tuples
@@ -133,35 +238,8 @@ async def clean_multiple_contents(
     Returns:
         List of (cleaned_content, success_flag) tuples in same order
     """
-    get_logger().info(f"🧹 Starting parallel cleaning of {len(content_items)} content items")
-    start_time = asyncio.get_event_loop().time()
-    
-    # Process all content cleaning operations in parallel
-    cleaning_tasks = [
-        clean_scraped_content(content, topic, source_url)
-        for content, topic, source_url in content_items
-    ]
-    
-    results = await asyncio.gather(*cleaning_tasks, return_exceptions=True)
-    
-    # Handle any exceptions that occurred during parallel processing
-    cleaned_results = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            get_logger().error(f"Exception in parallel cleaning #{i}: {str(result)}")
-            # Return original content for failed items
-            original_content = content_items[i][0]
-            cleaned_results.append((original_content, False))
-        else:
-            cleaned_results.append(result)
-    
-    total_time = asyncio.get_event_loop().time() - start_time
-    success_count = sum(1 for _, success in cleaned_results if success)
-    
-    get_logger().info(f"✅ Parallel content cleaning completed: {success_count}/{len(content_items)} successful "
-               f"in {total_time:.2f}s")
-    
-    return cleaned_results
+    # Use batched processing for better performance
+    return await clean_multiple_contents_batched(content_items, batch_size=4)
 
 
 # Utility function for integration
