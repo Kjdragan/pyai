@@ -202,7 +202,7 @@ async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
         estimated_input_tokens = total_api_calls * 2500  # Average input per call
         estimated_output_tokens = total_api_calls * 800   # Average output per call
         
-        # Cost calculation (rough estimates for gpt-4o)
+        # Cost calculation (rough estimates for gpt-5-mini)
         input_cost_per_1k = 0.0025  # $0.0025 per 1K input tokens
         output_cost_per_1k = 0.01   # $0.01 per 1K output tokens
         
@@ -211,7 +211,7 @@ async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
         
         # Cost optimization opportunities
         optimization_opportunities = [
-            f"Switch YouTube Agent to gpt-4.1-nano-2025-04-14: 70% cost reduction (~${total_cost * 0.7:.2f} savings)",
+            f"Switch YouTube Agent to gpt-5-nano-2025-08-07: 70% cost reduction (~${total_cost * 0.7:.2f} savings)",
             f"Eliminate agent duplication: 50% call reduction (~${total_cost * 0.5:.2f} savings)",
             "Implement response caching: 20-30% reduction for repeated queries",
             "Optimize prompt sizes: 15-25% token reduction potential"
@@ -222,8 +222,8 @@ async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
             "total_output_tokens": estimated_output_tokens,
             "estimated_cost_usd": total_cost,
             "cost_by_model": {
-                "gpt-4o": total_cost * 0.9,  # Most usage
-                "gpt-4.1-nano-2025-04-14": total_cost * 0.1  # Minimal current usage
+                "gpt-5-mini-2025-08-07": total_cost * 0.9,  # Most usage
+                "gpt-5-nano-2025-08-07": total_cost * 0.1  # Minimal current usage
             },
             "optimization_opportunities": optimization_opportunities,
             "potential_monthly_savings": total_cost * 30 * 0.6  # 60% savings potential monthly
