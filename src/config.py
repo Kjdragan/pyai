@@ -84,6 +84,15 @@ class Config:
         "raw_content,scraped_content,pre_filter_content,post_filter_content"
     ).split(",") if f.strip()]
 
+    # Research parallelism & behavior flags
+    RESEARCH_PARALLELISM_ENABLED: bool = os.getenv("RESEARCH_PARALLELISM_ENABLED", "false").lower() == "true"
+    RESEARCH_MAX_CONCURRENCY: int = int(os.getenv("RESEARCH_MAX_CONCURRENCY", "8"))
+    SERPER_MAX_CONCURRENCY: int = int(os.getenv("SERPER_MAX_CONCURRENCY", "5"))
+    # Prevent agents from expanding queries on their own unless explicitly allowed
+    ALLOW_AGENT_QUERY_EXPANSION: bool = os.getenv("ALLOW_AGENT_QUERY_EXPANSION", "false").lower() == "true"
+    # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
+    GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.4"))
+
     @classmethod
     def validate_required_keys(cls) -> list[str]:
         """Validate that required API keys are present."""

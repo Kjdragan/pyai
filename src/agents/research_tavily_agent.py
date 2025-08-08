@@ -357,31 +357,43 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
             print(f"🎯 TAVILY TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
             print(f"📝 Sub-queries: {sub_questions}")
         else:
-            # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
-            sub_questions = await expand_query_to_subquestions(query)
-            print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+            # Enforce centralized queries unless explicitly allowed
+            if not config.ALLOW_AGENT_QUERY_EXPANSION:
+                sub_questions = [query]
+                print(f"🎯 TAVILY TOOL DEBUG: Using centralized single query (expansion disabled).")
+            else:
+                # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
+                sub_questions = await expand_query_to_subquestions(query)
+                print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
         
         # Get reusable async client
         client = await ctx.deps.get_client()
         print(f"🔗 TAVILY TOOL DEBUG: Client created successfully")
         
-        # Perform parallel searches with rate limiting and proper error handling
-        search_tasks = []
-        for question in sub_questions:
-            # Apply rate limiting before each request
+        # Perform searches with rate limiting and optional bounded parallelism
+        async def _one_search(q: str):
             await ctx.deps.rate_limit()
-            search_tasks.append(
-                search_tavily(
-                    client, 
-                    question, 
-                    ctx.deps.max_results,  # Full result capacity per sub-query for comprehensive coverage
-                    time_range=config.TAVILY_TIME_RANGE,  # Configurable time range
-                    exclude_domains=["pinterest.com", "quora.com"]  # Filter low-quality domains
-                )
+            return await search_tavily(
+                client,
+                q,
+                ctx.deps.max_results,
+                time_range=config.TAVILY_TIME_RANGE,
+                exclude_domains=["pinterest.com", "quora.com"],
             )
-        
-        # Use return_exceptions=True to handle failures gracefully (best practice)
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+
+        if config.RESEARCH_PARALLELISM_ENABLED:
+            sem = asyncio.Semaphore(config.RESEARCH_MAX_CONCURRENCY)
+
+            async def _bounded(q: str):
+                async with sem:
+                    return await _one_search(q)
+
+            search_tasks = [_bounded(question) for question in sub_questions]
+            # Use return_exceptions=True to handle failures gracefully (best practice)
+            search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        else:
+            search_tasks = [_one_search(question) for question in sub_questions]
+            search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
         print(f"🔍 TAVILY TOOL DEBUG: Received {len(search_results)} search results")
         
         # Combine results
@@ -417,7 +429,7 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
                     content=item.scraped_content,
                     url=item.source_url or "",
                     title=item.title or "",
-                    quality_threshold=0.4  # Configurable threshold
+                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD  # Configurable threshold
                 )
                 
                 # Get detailed quality analysis for insights
@@ -452,10 +464,7 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
                     item.post_filter_content_length = len(item.scraped_content or "")
                     filtered_items.append(item)
                 
-                # PERFORMANCE OPTIMIZATION: Truncate pre-filter content after processing for log efficiency
-                # Keep full content for processing, but truncate stored version to save space
-                if item.pre_filter_content and len(item.pre_filter_content) > 500:
-                    item.pre_filter_content = item.pre_filter_content[:500] + "...[TRUNCATED FOR LOG EFFICIENCY]"
+                # Preserve full pre-filter content for raw logs; truncation handled by logging layer
                     
             # Generate detailed filtering summary for insights
             total_pre_filter_chars = sum(item.pre_filter_content_length or 0 for item in all_results if hasattr(item, 'pre_filter_content_length') and item.pre_filter_content_length)

@@ -325,19 +325,34 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
             print(f"🎯 SERPER TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
             print(f"📝 Sub-queries: {sub_questions}")
         else:
-            # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
-            sub_questions = await expand_query_to_subquestions(query)
-            print(f"📝 SERPER TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+            # Enforce centralized queries unless explicitly allowed
+            if not config.ALLOW_AGENT_QUERY_EXPANSION:
+                sub_questions = [query]
+                print(f"🎯 SERPER TOOL DEBUG: Using centralized single query (expansion disabled).")
+            else:
+                # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
+                sub_questions = await expand_query_to_subquestions(query)
+                print(f"📝 SERPER TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
         
         # Perform parallel searches with full result capacity per sub-query
         # This allows comprehensive research coverage instead of artificially limiting results
-        search_tasks = [
-            search_serper(question, ctx.deps.api_key, ctx.deps.max_results)
-            for question in sub_questions
-        ]
-        
-        # Execute searches in parallel
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        # Execute searches with optional bounded parallelism
+        if config.RESEARCH_PARALLELISM_ENABLED:
+            sem = asyncio.Semaphore(config.SERPER_MAX_CONCURRENCY)
+
+            async def _bounded_search(q: str):
+                async with sem:
+                    return await search_serper(q, ctx.deps.api_key, ctx.deps.max_results)
+
+            search_tasks = [_bounded_search(question) for question in sub_questions]
+            search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        else:
+            # Previous behavior: unbounded gather (usually small N)
+            search_tasks = [
+                search_serper(question, ctx.deps.api_key, ctx.deps.max_results)
+                for question in sub_questions
+            ]
+            search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
         print(f"🔍 SERPER TOOL DEBUG: Received {len(search_results)} search results")
         
         # Combine results
@@ -373,7 +388,7 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
                     content=item.scraped_content,
                     url=item.source_url or "",
                     title=item.title or "",
-                    quality_threshold=0.4  # Configurable threshold
+                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD  # Configurable threshold
                 )
                 
                 # Get detailed quality analysis for insights
