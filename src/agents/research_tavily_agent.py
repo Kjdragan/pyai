@@ -443,6 +443,27 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         
         print(f"🔢 TAVILY TOOL DEBUG: Total combined results: {len(all_results)}")
         
+        # PERFORMANCE OPTIMIZATION: Clean scraped content using nano model
+        # This removes boilerplate text before report generation for 40-50% speed improvement
+        scraped_items = [item for item in all_results if item.scraped_content and item.content_scraped]
+        if scraped_items:
+            print(f"🧹 Starting content cleaning for {len(scraped_items)} Tavily results")
+            cleaning_start = asyncio.get_event_loop().time()
+            
+            # Create cleaning tasks for parallel processing
+            cleaning_tasks = [
+                clean_research_item_content(item, query)
+                for item in scraped_items
+            ]
+            
+            # Execute content cleaning in parallel for maximum efficiency
+            await asyncio.gather(*cleaning_tasks, return_exceptions=True)
+            
+            cleaning_time = asyncio.get_event_loop().time() - cleaning_start
+            print(f"✅ Content cleaning completed in {cleaning_time:.2f}s")
+        else:
+            print(f"⏭️ No scraped content to clean from Tavily results")
+        
         # Clean and format results
         cleaned_results = clean_and_format_results(all_results, query)
         print(f"✨ TAVILY TOOL DEBUG: After cleaning: {len(cleaned_results)} results")
@@ -509,17 +530,7 @@ async def process_tavily_research_request(query: str) -> AgentResponse:
             if isinstance(results, list):
                 all_results.extend(results)
         
-        # PERFORMANCE OPTIMIZATION: Clean scraped content using nano model
-        # This removes boilerplate text before report generation for 40-50% speed improvement
-        logger.info(f"🧹 Starting content cleaning for {len(all_results)} Tavily results")
-        cleaning_start = asyncio.get_event_loop().time()
-        
-        for item in all_results:
-            if item.scraped_content and item.content_scraped:
-                await clean_research_item_content(item, query)
-        
-        cleaning_time = asyncio.get_event_loop().time() - cleaning_start
-        logger.info(f"✅ Content cleaning completed in {cleaning_time:.2f}s")
+        # Content cleaning is handled in parallel within perform_tavily_research tool
         
         cleaned_results = clean_and_format_results(all_results, query)
         

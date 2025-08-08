@@ -314,7 +314,7 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     # Analyze what agents are needed based on query
     needs_youtube = "youtube.com" in user_query or "youtu.be" in user_query
     needs_weather = any(word in user_query.lower() for word in ["weather", "temperature", "forecast", "climate"])
-    needs_research = any(word in user_query.lower() for word in ["research", "search", "find", "investigate", "analyze"])
+    needs_research = any(word in user_query.lower() for word in ["research", "search", "find", "investigate", "analyze", "latest", "developments", "trends", "news", "get", "information", "about", "energy", "technology", "industry", "market"])
     needs_report = any(word in user_query.lower() for word in ["report", "summary", "analyze", "write", "document"])
     
     await stream_update(StreamingUpdate(
@@ -729,15 +729,29 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         success_count = sum(1 for _, response in results if response.success)
         total_results = sum(response.data.get('total_results', 0) for _, response in results if response.success)
         
-        # Aggregate and combine ALL successful research results
+        # Aggregate and combine ALL successful research results with cross-API deduplication
         all_research_results = []
         combined_sub_queries = []
         primary_query = query
+        seen_urls = set()  # Track URLs to prevent duplicate scraping across APIs
+        duplicate_count = 0
         
         for name, response in results:
             if response.success:
                 research_model = ResearchPipelineModel(**response.data)
-                all_research_results.extend(research_model.results)
+                
+                # Add results with deduplication based on source_url
+                for result in research_model.results:
+                    if result.source_url and result.source_url in seen_urls:
+                        duplicate_count += 1
+                        print(f"🔄 DEDUPLICATION: Skipping duplicate URL from {name}: {result.source_url}")
+                        continue
+                    
+                    # Track this URL and add the result
+                    if result.source_url:
+                        seen_urls.add(result.source_url)
+                    all_research_results.append(result)
+                
                 combined_sub_queries.extend(research_model.sub_queries)
                 primary_query = research_model.original_query  # Use last successful query
                 
@@ -747,6 +761,7 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         
         # Create combined research model with ALL results from ALL pipelines
         if all_research_results:
+            print(f"✅ DEDUPLICATION: Prevented {duplicate_count} duplicate URLs from being processed")
             combined_research = ResearchPipelineModel(
                 original_query=primary_query,
                 sub_queries=list(set(combined_sub_queries)),  # Remove duplicates

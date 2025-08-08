@@ -174,22 +174,34 @@ async def clean_research_item_content(research_item, topic: str) -> None:
         topic: Research topic for context
     """
     if not research_item.scraped_content or not research_item.content_scraped:
+        get_logger().debug(f"⏭️ Skipping cleaning for item without scraped content: {research_item.source_url}")
         return  # Nothing to clean
+    
+    start_time = asyncio.get_event_loop().time()
+    source_url = research_item.source_url or "unknown"
+    original_length = len(research_item.scraped_content)
+    
+    get_logger().debug(f"🧹 Starting content cleaning for {source_url}: {original_length} chars")
         
     original_content = research_item.scraped_content
     cleaned_content, success = await clean_scraped_content(
         original_content, 
         topic, 
-        research_item.source_url or "unknown"
+        source_url
     )
     
-    # Update the research item with cleaned content
-    research_item.scraped_content = cleaned_content
+    # Calculate metrics
+    processing_time = asyncio.get_event_loop().time() - start_time
+    cleaned_length = len(cleaned_content)
+    reduction_pct = ((original_length - cleaned_length) / original_length) * 100 if original_length > 0 else 0
     
-    # Add metadata about the cleaning process
-    if hasattr(research_item, 'content_cleaned'):
-        research_item.content_cleaned = success
-    if hasattr(research_item, 'original_content_length'):
-        research_item.original_content_length = len(original_content)
-    if hasattr(research_item, 'cleaned_content_length'):
-        research_item.cleaned_content_length = len(cleaned_content)
+    # Update the research item with cleaned content and metadata
+    research_item.scraped_content = cleaned_content
+    research_item.content_cleaned = success
+    research_item.original_content_length = original_length
+    research_item.cleaned_content_length = cleaned_length
+    
+    # Log performance metrics
+    status = "✅ SUCCESS" if success else "❌ FAILED"
+    get_logger().info(f"{status} Content cleaning for {source_url}: {original_length} → {cleaned_length} chars "
+                      f"({reduction_pct:.1f}% reduction) in {processing_time:.2f}s")

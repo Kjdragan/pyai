@@ -396,15 +396,24 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         
         # PERFORMANCE OPTIMIZATION: Clean scraped content using nano model
         # This removes boilerplate text before report generation for 40-50% speed improvement
-        print(f"🧹 Starting content cleaning for {len(all_results)} Serper results")
-        cleaning_start = asyncio.get_event_loop().time()
-        
-        for item in all_results:
-            if hasattr(item, 'scraped_content') and item.scraped_content and hasattr(item, 'content_scraped') and item.content_scraped:
-                await clean_research_item_content(item, query)
-        
-        cleaning_time = asyncio.get_event_loop().time() - cleaning_start
-        print(f"✅ Content cleaning completed in {cleaning_time:.2f}s")
+        scraped_items = [item for item in all_results if item.scraped_content and item.content_scraped]
+        if scraped_items:
+            print(f"🧹 Starting content cleaning for {len(scraped_items)} Serper results")
+            cleaning_start = asyncio.get_event_loop().time()
+            
+            # Create cleaning tasks for parallel processing
+            cleaning_tasks = [
+                clean_research_item_content(item, query)
+                for item in scraped_items
+            ]
+            
+            # Execute content cleaning in parallel for maximum efficiency
+            await asyncio.gather(*cleaning_tasks, return_exceptions=True)
+            
+            cleaning_time = asyncio.get_event_loop().time() - cleaning_start
+            print(f"✅ Content cleaning completed in {cleaning_time:.2f}s")
+        else:
+            print(f"⏭️ No scraped content to clean from Serper results")
         
         # Clean and format results
         cleaned_results = clean_and_format_results(all_results, query)
