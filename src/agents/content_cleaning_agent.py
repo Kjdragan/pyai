@@ -5,6 +5,7 @@ Uses fast nano model to efficiently clean navigation menus, ads, and irrelevant 
 
 import asyncio
 from typing import Optional
+from urllib.parse import urlparse
 from datetime import datetime
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -57,6 +58,14 @@ content_cleaning_agent = Agent(
     retries=2  # Quick retry on failure
 )
 
+def _is_pdf_url(url: str) -> bool:
+    """Best-effort check if URL path ends with .pdf (ignores query params)."""
+    try:
+        path = urlparse(url or "").path.lower()
+        return path.endswith(".pdf")
+    except Exception:
+        return False
+
 
 async def clean_scraped_content(
     content: str, 
@@ -79,6 +88,11 @@ async def clean_scraped_content(
     start_time = asyncio.get_event_loop().time()
     
     try:
+        # Use a PDF-aware cleaning hint: keep main body text, only remove obvious site chrome
+        is_pdf = _is_pdf_url(source_url)
+        if is_pdf and config.CLEANING_SKIP_PDFS:
+            get_logger().info(f"📄 PDF detected for cleaning (non-batched): {source_url}")
+
         # Skip cleaning for very short content (likely already clean)
         if len(content) < 500:
             get_logger().debug(f"Skipping cleaning for short content from {source_url}: {len(content)} chars")
@@ -93,6 +107,8 @@ async def clean_scraped_content(
         Keep only the main content that is directly related to: {topic}
         
         Source: {source_url}
+        
+        {'IMPORTANT: This appears to be a PDF report. Do NOT remove report body text; only remove obvious site chrome (headers/footers, menus). If unsure, keep the text.' if is_pdf else ''}
         
         Raw content to clean:
         
@@ -162,6 +178,14 @@ async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tupl
         content, topic, source_url = batch[0]
         return [await clean_scraped_content(content, topic, source_url)]
     
+    # If any PDFs are present and skipping PDFs is enabled, fall back to individual processing
+    if config.CLEANING_SKIP_PDFS and any(_is_pdf_url(src) for _, _, src in batch):
+        get_logger().info("⏭️ PDF detected in batch; falling back to individual cleaning to avoid truncation")
+        results = []
+        for content, topic, source_url in batch:
+            results.append(await clean_scraped_content(content, topic, source_url))
+        return results
+    
     # Multi-item batch processing
     batch_prompt = _create_batch_prompt(batch)
     
@@ -207,7 +231,8 @@ def _create_batch_prompt(batch: list[tuple[str, str, str]]) -> str:
     for i, (content, topic, source_url) in enumerate(batch, 1):
         prompt_parts.append(f"ITEM {i} - Topic: {topic}")
         prompt_parts.append(f"Source: {source_url}")
-        prompt_parts.append(f"Content:\n{content[:5000]}...")  # Limit content per item
+        # Limit content per item to keep prompt sizes bounded; PDFs are handled outside batch path
+        prompt_parts.append(f"Content:\n{content[:5000]}...")
         prompt_parts.append("")
     
     prompt_parts.append("Return only the cleaned content for each item, separated by '---ITEM-SEPARATOR---'.")

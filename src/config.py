@@ -93,6 +93,9 @@ class Config:
     # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
     GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.4"))
 
+    # Content cleaning behavior
+    CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "true").lower() == "true"
+
     @classmethod
     def validate_required_keys(cls) -> list[str]:
         """Validate that required API keys are present."""
