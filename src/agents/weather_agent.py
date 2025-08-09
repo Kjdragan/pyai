@@ -102,28 +102,63 @@ weather_agent = Agent(
 
 
 @weather_agent.tool
-async def get_weather_data(ctx: RunContext[WeatherAgentDeps], location: str) -> str:
+async def get_weather_data(ctx: RunContext[WeatherAgentDeps], location: str) -> WeatherModel:
     """Tool to fetch weather data for a location."""
     try:
         if not ctx.deps.api_key:
-            return "Error: OpenWeather API key not configured"
+            # Return minimal WeatherModel with error state
+            return WeatherModel(
+                location=location,
+                current=WeatherData(
+                    timestamp=datetime.now().isoformat(),
+                    temp=0.0,
+                    description="API key not configured",
+                    humidity=0,
+                    wind_speed=0.0
+                ),
+                forecast=[],
+                units=ctx.deps.units
+            )
         
-        # Fetch current weather
+        # Fetch current weather and forecast
         current_data = await fetch_current_weather(
             location, ctx.deps.api_key, ctx.deps.units
         )
-        
-        # Fetch forecast
         forecast_data = await fetch_weather_forecast(
             location, ctx.deps.api_key, ctx.deps.units
         )
         
-        return f"Successfully fetched weather data for {location}. " \
-               f"Current temperature: {current_data['main']['temp']}°. " \
-               f"Forecast available for {len(forecast_data['list'])} time periods."
+        # Parse current weather
+        current_weather = parse_weather_data(current_data)
+        
+        # Parse forecast (take every 8th entry for daily forecast - 3-hour intervals)
+        forecast_list = []
+        for i in range(0, min(len(forecast_data["list"]), 40), 8):  # 7 days max
+            forecast_item = parse_weather_data(forecast_data["list"][i])
+            forecast_list.append(forecast_item)
+        
+        # Return WeatherModel object to match agent output_type
+        return WeatherModel(
+            location=location,
+            current=current_weather,
+            forecast=forecast_list,
+            units=ctx.deps.units
+        )
                
     except Exception as e:
-        return f"Error fetching weather data: {str(e)}"
+        # Return minimal WeatherModel with error state
+        return WeatherModel(
+            location=location,
+            current=WeatherData(
+                timestamp=datetime.now().isoformat(),
+                temp=0.0,
+                description=f"Error: {str(e)}",
+                humidity=0,
+                wind_speed=0.0
+            ),
+            forecast=[],
+            units=ctx.deps.units
+        )
 
 
 async def process_weather_request(location: str) -> AgentResponse:

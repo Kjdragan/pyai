@@ -292,20 +292,21 @@ async def expand_query_intelligently(ctx: RunContext[SerperResearchDeps], query:
 
 
 @serper_research_agent.tool
-async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: str) -> dict:
-    """Tool to perform comprehensive Serper research and return raw API data."""
+async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: str) -> ResearchPipelineModel:
+    """Tool to perform comprehensive Serper research and return ResearchPipelineModel."""
     try:
         print(f"🔍 SERPER TOOL DEBUG: Starting research for query: {query}")
         
         if not ctx.deps.api_key:
             print(f"❌ SERPER TOOL DEBUG: API key not configured")
-            return {
-                "error": "Serper API key not configured",
-                "original_query": query,
-                "sub_queries": [],
-                "raw_results": [],
-                "processing_time": 0.0
-            }
+            return ResearchPipelineModel(
+                original_query=query,
+                sub_queries=[],
+                results=[],
+                pipeline_type="serper",
+                total_results=0,
+                processing_time=0.0
+            )
         
         print(f"✅ SERPER TOOL DEBUG: API key configured, current date: {ctx.deps.current_date}")
         
@@ -325,14 +326,10 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
             print(f"🎯 SERPER TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
             print(f"📝 Sub-queries: {sub_questions}")
         else:
-            # Enforce centralized queries unless explicitly allowed
-            if not config.ALLOW_AGENT_QUERY_EXPANSION:
-                sub_questions = [query]
-                print(f"🎯 SERPER TOOL DEBUG: Using centralized single query (expansion disabled).")
-            else:
-                # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
-                sub_questions = await expand_query_to_subquestions(query)
-                print(f"📝 SERPER TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+            # CRITICAL FIX: Use single query as fallback instead of generating new sub-queries
+            # This prevents the infinite loop that was causing 58+ API calls
+            sub_questions = [query]
+            print(f"🎯 SERPER TOOL DEBUG: Using single query fallback (no pre-generated sub-queries found)")
         
         # Perform parallel searches with full result capacity per sub-query
         # This allows comprehensive research coverage instead of artificially limiting results
@@ -364,7 +361,7 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
             else:
                 print(f"⚠️ SERPER TOOL DEBUG: Search {i+1} returned non-list: {type(results)}")
         
-        print(f"🔢 SERPER TOOL DEBUG: Total combined results: {len(all_results)}")
+        print(f"📊 SERPER TOOL DEBUG: Total combined results: {len(all_results)}")
         
         # PERFORMANCE OPTIMIZATION: Apply programmatic garbage filtering before expensive LLM cleaning
         # This prevents wasting compute resources on low-quality content
@@ -501,55 +498,28 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         ctx.deps.research_results = cleaned_results
         ctx.deps.sub_questions = sub_questions
         
-        # Return raw research data for agent processing
-        result_dict = {
-            "original_query": query,
-            "sub_queries": sub_questions,
-            "raw_results": [result.model_dump() for result in cleaned_results],
-            "processing_time": 0.0  # Will be calculated at agent level
-        }
-        print(f"🎯 SERPER TOOL DEBUG: Returning dict with {len(result_dict['raw_results'])} raw results")
-        return result_dict
+        # CRITICAL FIX: Return ResearchPipelineModel instead of dict to prevent infinite agent loop
+        return ResearchPipelineModel(
+            original_query=query,
+            sub_queries=sub_questions,
+            results=cleaned_results,  # Already ResearchItem objects
+            pipeline_type="serper",
+            total_results=len(cleaned_results),
+            processing_time=0.0  # Will be calculated at agent level
+        )
                
     except Exception as e:
         print(f"❌ SERPER TOOL DEBUG: Exception caught: {str(e)}")
         import traceback
         print(f"❌ SERPER TOOL DEBUG: Traceback: {traceback.format_exc()}")
-        return {
-            "error": f"Error performing Serper research: {str(e)}",
-            "original_query": query,
-            "sub_queries": [],
-            "raw_results": [],
-            "processing_time": 0.0
-        }
+        return ResearchPipelineModel(
+            original_query=query,
+            sub_queries=[],
+            results=[],
+            pipeline_type="serper",
+            total_results=0,
+            processing_time=0.0
+        )
 
 
-async def process_serper_research_request(query: str) -> AgentResponse:
-    """Process Serper research request."""
-    start_time = asyncio.get_event_loop().time()
-    
-    try:
-        deps = SerperResearchDeps()
-        result = await serper_research_agent.run(
-            f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
-            f"Please search for real web sources and return structured results with actual URLs and data.",
-            deps=deps
-        )
-        
-        processing_time = asyncio.get_event_loop().time() - start_time
-        
-        return AgentResponse(
-            agent_name="SerperResearchAgent",
-            success=True,
-            data=result.data.model_dump() if result.data else {},
-            processing_time=processing_time
-        )
-        
-    except Exception as e:
-        processing_time = asyncio.get_event_loop().time() - start_time
-        return AgentResponse(
-            agent_name="SerperResearchAgent",
-            success=False,
-            error=str(e),
-            processing_time=processing_time
-        )
+# DELETED: Legacy function removed - use serper_research_agent Pydantic AI agent instead

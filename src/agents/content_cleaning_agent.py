@@ -12,6 +12,7 @@ from pydantic_ai.models.openai import OpenAIModel
 
 from config import config
 from logging_config import get_agent_logger
+from telemetry.run_summary import run_summary  # dev-only tracing summary
 
 def get_logger():
     """Lazy-load logger to avoid initialization issues during import."""
@@ -20,6 +21,7 @@ def get_logger():
 # Create Content Cleaning Agent with nano model for speed and cost efficiency
 content_cleaning_agent = Agent(
     model=OpenAIModel(config.NANO_MODEL),  # Fast, cheap model perfect for this task
+    output_type=str,  # CRITICAL FIX: Return cleaned content as string
     instrument=True,  # Enable Pydantic AI tracing
     system_prompt="""
     You are a content cleaning specialist. Your job is to extract only the main, relevant content from web-scraped text, removing all boilerplate, navigation, advertising, and irrelevant elements.
@@ -126,12 +128,20 @@ async def clean_scraped_content(
         
         get_logger().info(f"✅ Content cleaned from {source_url}: {original_length} → {cleaned_length} chars "
                    f"({reduction_pct:.1f}% reduction) in {processing_time:.2f}s")
+        try:
+            run_summary.observe_cleaning(chars_in=original_length, chars_out=cleaned_length, success=True)
+        except Exception:
+            pass
         
         return cleaned_content, True
         
     except Exception as e:
         processing_time = asyncio.get_event_loop().time() - start_time
         get_logger().error(f"❌ Content cleaning failed for {source_url}: {str(e)} (took {processing_time:.2f}s)")
+        try:
+            run_summary.observe_cleaning(chars_in=len(content), chars_out=len(content), success=False)
+        except Exception:
+            pass
         
         # Return original content on failure - don't break the pipeline
         return content, False
@@ -203,10 +213,18 @@ async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tupl
                 # Log metrics
                 reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
                 get_logger().info(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
+                try:
+                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(cleaned), success=True)
+                except Exception:
+                    pass
             else:
                 # Fallback to original content
                 results.append((original_content, False))
                 get_logger().error(f"❌ Batch cleaning failed for {source_url}, using original")
+                try:
+                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(original_content), success=False)
+                except Exception:
+                    pass
         
         return results
         

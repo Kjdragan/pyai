@@ -725,7 +725,7 @@ async def generate_intelligent_report_tool(
     data_sources: str,
     style: str = "summary",
     quality_level: str = "standard"
-) -> str:
+) -> ReportGenerationModel:
     """Tool to generate intelligent report with adaptive templates and quality control.
 
     Args:
@@ -757,7 +757,18 @@ async def generate_intelligent_report_tool(
 
         # Validate data availability
         if not universal_data.has_data():
-            return "Error: No valid data sources provided for report generation"
+            # Return minimal ReportGenerationModel for error case
+            return ReportGenerationModel(
+                style=style,
+                prompt_template="Error template",
+                draft="No valid data sources provided",
+                final="Error: No valid data sources provided for report generation",
+                source_type="multi_source",
+                quality_level=quality_level,
+                word_count=0,
+                generation_time=0.0,
+                confidence_score=0.0
+            )
 
         # Generate report
         response = await process_intelligent_report_request(
@@ -767,16 +778,52 @@ async def generate_intelligent_report_tool(
         )
 
         if response.success:
+            # Extract ReportGenerationModel from response.data
             report_data = response.data
-            return f"Successfully generated {style} {quality_level}-quality report. " \
-                   f"Length: {report_data.get('word_count', 0)} words. " \
-                   f"Data sources: {', '.join(universal_data.get_data_types())}. " \
-                   f"Processing time: {response.processing_time:.1f}s"
+            if isinstance(report_data, dict) and 'report_model' in report_data:
+                # Return the actual ReportGenerationModel
+                return report_data['report_model']
+            else:
+                # Construct minimal ReportGenerationModel from available data
+                return ReportGenerationModel(
+                    style=style,
+                    prompt_template="Generated template",
+                    draft="Generated draft content",
+                    final=report_data.get('final', 'Generated report content') if isinstance(report_data, dict) else str(report_data),
+                    source_type="multi_source",
+                    quality_level=quality_level,
+                    word_count=report_data.get('word_count', 0) if isinstance(report_data, dict) else 0,
+                    generation_time=response.processing_time,
+                    confidence_score=report_data.get('confidence_score', 0.8) if isinstance(report_data, dict) else 0.8,
+                    data_sources_count=len(universal_data.get_data_types())
+                )
         else:
-            return f"Error generating report: {response.error}"
+            # Return ReportGenerationModel for error case
+            return ReportGenerationModel(
+                style=style,
+                prompt_template="Error template",
+                draft="Report generation failed",
+                final=f"Error generating report: {response.error}",
+                source_type="multi_source",
+                quality_level=quality_level,
+                word_count=0,
+                generation_time=response.processing_time or 0.0,
+                confidence_score=0.0
+            )
 
     except Exception as e:
-        return f"Error in intelligent report generation: {str(e)}"
+        # Return ReportGenerationModel for exception case
+        return ReportGenerationModel(
+            style=style,
+            prompt_template="Error template",
+            draft="Exception occurred during generation",
+            final=f"Error in intelligent report generation: {str(e)}",
+            source_type="multi_source",
+            quality_level=quality_level,
+            word_count=0,
+            generation_time=0.0,
+            confidence_score=0.0
+        )
 
 
 # Legacy tool maintained for backward compatibility
@@ -786,18 +833,38 @@ async def generate_report(
     data_json: str,
     style: str,
     source_type: str
-) -> str:
+) -> ReportGenerationModel:
     """Legacy tool for report generation - maintained for backward compatibility."""
     try:
         # Get appropriate template (legacy)
         template = get_report_template(style, source_type)
 
-        return f"Successfully generated {style} report template for {source_type} data. " \
-               f"Template includes {len(template.split('##'))} main sections. " \
-               f"Ready to process data and generate draft."
+        # Return minimal ReportGenerationModel for legacy tool
+        return ReportGenerationModel(
+            style=style,
+            prompt_template=template,
+            draft="Legacy tool generated draft",
+            final=f"Successfully generated {style} report template for {source_type} data. Template includes {len(template.split('##'))} main sections.",
+            source_type=source_type,
+            quality_level="standard",
+            word_count=len(template.split()),
+            generation_time=0.1,
+            confidence_score=0.7
+        )
 
     except Exception as e:
-        return f"Error generating report: {str(e)}"
+        # Return ReportGenerationModel for error case
+        return ReportGenerationModel(
+            style=style,
+            prompt_template="Error template",
+            draft="Error occurred",
+            final=f"Error generating report: {str(e)}",
+            source_type=source_type,
+            quality_level="standard",
+            word_count=0,
+            generation_time=0.0,
+            confidence_score=0.0
+        )
 
 
 async def process_intelligent_report_request(

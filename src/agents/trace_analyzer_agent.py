@@ -73,11 +73,14 @@ trace_analyzer_agent = Agent(
 
 
 @trace_analyzer_agent.tool
-async def fetch_recent_traces(ctx, query_params: str) -> Dict[str, Any]:
+async def fetch_recent_traces(ctx, query_params: str) -> str:
     """Fetch recent traces from Logfire for analysis.
     
     Args:
         query_params: JSON string with TraceQuery parameters
+    
+    Returns:
+        JSON string containing trace data
     """
     try:
         import json
@@ -110,24 +113,27 @@ async def fetch_recent_traces(ctx, query_params: str) -> Dict[str, Any]:
             ]
         }
         
-        return mock_traces
+        return json.dumps(mock_traces)
         
     except Exception as e:
-        return {"error": f"Failed to fetch traces: {str(e)}", "traces": []}
+        return json.dumps({"error": f"Failed to fetch traces: {str(e)}", "traces": []})
 
 
 @trace_analyzer_agent.tool
-async def analyze_performance_metrics(ctx, traces_data: str) -> Dict[str, Any]:
+async def analyze_performance_metrics(ctx, traces_data: str) -> str:
     """Analyze performance metrics from trace data.
     
     Args:
         traces_data: JSON string containing trace data
+        
+    Returns:
+        JSON string containing performance analysis
     """
     try:
         traces = json.loads(traces_data)
         
         if "traces" not in traces or not traces["traces"]:
-            return {"error": "No trace data available for analysis"}
+            return json.dumps({"error": "No trace data available for analysis"})
         
         # Calculate performance metrics
         total_traces = len(traces["traces"])
@@ -167,7 +173,7 @@ async def analyze_performance_metrics(ctx, traces_data: str) -> Dict[str, Any]:
             stats["success_rate"] = stats["success_count"] / stats["total_calls"] if stats["total_calls"] > 0 else 1
             stats["avg_response_time"] = stats["total_time"] / stats["total_calls"] if stats["total_calls"] > 0 else 0
         
-        return {
+        return json.dumps({
             "total_traces": total_traces,
             "success_rate": success_rate,
             "avg_duration": avg_duration,
@@ -178,18 +184,21 @@ async def analyze_performance_metrics(ctx, traces_data: str) -> Dict[str, Any]:
                 "503 Service Unavailable errors causing 30%+ runtime impact",
                 "No parallel processing - agents running sequentially"
             ]
-        }
+        })
         
     except Exception as e:
-        return {"error": f"Performance analysis failed: {str(e)}"}
+        return json.dumps({"error": f"Performance analysis failed: {str(e)}"})
 
 
 @trace_analyzer_agent.tool  
-async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
+async def generate_cost_analysis(ctx, traces_data: str) -> str:
     """Generate cost analysis from trace data.
     
     Args:
         traces_data: JSON string containing trace data
+        
+    Returns:
+        JSON string containing cost analysis
     """
     try:
         traces = json.loads(traces_data)
@@ -217,7 +226,7 @@ async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
             "Optimize prompt sizes: 15-25% token reduction potential"
         ]
         
-        return {
+        return json.dumps({
             "total_input_tokens": estimated_input_tokens,
             "total_output_tokens": estimated_output_tokens,
             "estimated_cost_usd": total_cost,
@@ -227,10 +236,10 @@ async def generate_cost_analysis(ctx, traces_data: str) -> Dict[str, Any]:
             },
             "optimization_opportunities": optimization_opportunities,
             "potential_monthly_savings": total_cost * 30 * 0.6  # 60% savings potential monthly
-        }
+        })
         
     except Exception as e:
-        return {"error": f"Cost analysis failed: {str(e)}"}
+        return json.dumps({"error": f"Cost analysis failed: {str(e)}"})
 
 
 async def analyze_traces(
@@ -265,7 +274,19 @@ async def analyze_traces(
         # Run the agent
         result = await trace_analyzer_agent.run(query, deps=deps)
         
-        return result.data if hasattr(result, 'data') and result.data else result
+        # Prefer the standardized Pydantic AI output field for typed returns
+        if hasattr(result, 'output') and result.output:
+            return result.output
+        
+        # Backward-compatibility: some code paths may still populate .data
+        if hasattr(result, 'data') and result.data:
+            try:
+                return TraceAnalysisReport(**result.data)
+            except Exception:
+                # As a last resort, return whatever is available
+                return result.data
+        
+        return result
         
     except Exception as e:
         # Return error report

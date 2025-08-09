@@ -4,8 +4,8 @@ Agent registry and initialization for the multi-agent system.
 
 from .youtube_agent import youtube_agent, process_youtube_request
 from .weather_agent import weather_agent, process_weather_request
-from .research_tavily_agent import tavily_research_agent, process_tavily_research_request
-from .research_serper_agent import serper_research_agent, process_serper_research_request
+from .research_tavily_agent import tavily_research_agent
+from .research_serper_agent import serper_research_agent
 from .report_writer_agent import report_writer_agent, process_report_request
 from .orchestrator_agent import orchestrator_agent, run_orchestrator_job
 from .trace_analyzer_agent import trace_analyzer_agent, analyze_traces
@@ -23,8 +23,6 @@ __all__ = [
     # Processing functions
     "process_youtube_request",
     "process_weather_request",
-    "process_tavily_research_request", 
-    "process_serper_research_request",
     "process_report_request",
     "run_orchestrator_job",
     "analyze_traces"
@@ -45,12 +43,12 @@ AGENT_REGISTRY = {
     },
     "research_tavily": {
         "agent": tavily_research_agent,
-        "processor": process_tavily_research_request,
+        "processor": None,  # Legacy processor function removed
         "description": "Research using Tavily API with query expansion"
     },
     "research_serper": {
         "agent": serper_research_agent,
-        "processor": process_serper_research_request,
+        "processor": None,  # Legacy processor function removed
         "description": "Research using Google Search via Serper API with URL scraping"
     },
     "report_writer": {

@@ -19,6 +19,7 @@ from agents.query_expansion import expand_query_to_subquestions as expand_query_
 from agents.content_cleaning_agent import clean_research_item_content
 from agents.quality_grader import quality_grader
 from utils.time_provider import today_str, now
+from telemetry.run_summary import run_summary  # dev-only tracing summary
 
 
 class TavilyResearchDeps:
@@ -324,22 +325,28 @@ async def expand_query_intelligently(ctx: RunContext[TavilyResearchDeps], query:
 
 
 @tavily_research_agent.tool
-async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: str) -> dict:
-    """Tool to perform comprehensive Tavily research and return raw API data."""
+async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: str) -> ResearchPipelineModel:
+    """Tool to perform comprehensive Tavily research and return ResearchPipelineModel."""
     try:
         print(f"🔍 TAVILY TOOL DEBUG: Starting research for query: {query}")
         
         if not ctx.deps.api_key:
             print(f"❌ TAVILY TOOL DEBUG: API key not configured")
-            return {
-                "error": "Tavily API key not configured",
-                "original_query": query,
-                "sub_queries": [],
-                "raw_results": [],
-                "processing_time": 0.0
-            }
+            return ResearchPipelineModel(
+                original_query=query,
+                sub_queries=[],
+                results=[],
+                pipeline_type="tavily",
+                total_results=0,
+                processing_time=0.0
+            )
         
         print(f"✅ TAVILY TOOL DEBUG: API key configured")
+        # DEV-ONLY TRACING: record thresholds used for this run
+        try:
+            run_summary.set_thresholds(config.TAVILY_MIN_SCORE, config.GARBAGE_FILTER_THRESHOLD)
+        except Exception:
+            pass
         
         # Check if pre-generated sub-queries are provided in the query (centralized approach)
         # This prevents duplicate query expansion across multiple research APIs
@@ -357,14 +364,10 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
             print(f"🎯 TAVILY TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
             print(f"📝 Sub-queries: {sub_questions}")
         else:
-            # Enforce centralized queries unless explicitly allowed
-            if not config.ALLOW_AGENT_QUERY_EXPANSION:
-                sub_questions = [query]
-                print(f"🎯 TAVILY TOOL DEBUG: Using centralized single query (expansion disabled).")
-            else:
-                # Fallback: Generate sub-questions if not provided (maintain backward compatibility)
-                sub_questions = await expand_query_to_subquestions(query)
-                print(f"📝 TAVILY TOOL DEBUG: Generated {len(sub_questions)} sub-questions: {sub_questions}")
+            # CRITICAL FIX: Use single query as fallback instead of generating new sub-queries
+            # This prevents the infinite loop that was causing 58+ API calls
+            sub_questions = [query]
+            print(f"🎯 TAVILY TOOL DEBUG: Using single query fallback (no pre-generated sub-queries found)")
         
         # Get reusable async client
         client = await ctx.deps.get_client()
@@ -399,13 +402,24 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         # Combine results
         all_results = []
         for i, results in enumerate(search_results):
-            if isinstance(results, list):
-                print(f"📊 TAVILY TOOL DEBUG: Search {i+1} returned {len(results)} results")
-                all_results.extend(results)
-            else:
-                print(f"⚠️ TAVILY TOOL DEBUG: Search {i+1} returned non-list: {type(results)}")
+            if isinstance(results, Exception):
+                print(f"❌ TAVILY TOOL DEBUG: Sub-query {i+1} failed: {results}")
+                continue
+            if not results:
+                continue
+            all_results.extend(results)
+
+        # DEV-ONLY TRACING: observe totals and PDF prevalence
+        try:
+            pdf_count = sum(1 for r in all_results if (r.source_url or '').lower().endswith('.pdf'))
+            run_summary.observe_research_results(total=len(all_results), filtered_out=0, pdf_count=pdf_count)
+            # If bounded concurrency enabled, record configured peak as a proxy
+            if config.RESEARCH_PARALLELISM_ENABLED:
+                run_summary.observe_research_concurrency(config.RESEARCH_MAX_CONCURRENCY)
+        except Exception:
+            pass
         
-        print(f"🔢 TAVILY TOOL DEBUG: Total combined results: {len(all_results)}")
+        print(f"📊 TAVILY TOOL DEBUG: Total combined results: {len(all_results)}")
         
         # PERFORMANCE OPTIMIZATION: Apply programmatic garbage filtering before expensive LLM cleaning
         # This prevents wasting compute resources on low-quality content
@@ -539,92 +553,29 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
         ctx.deps.research_results = cleaned_results
         ctx.deps.sub_questions = sub_questions
         
-        # Return raw research data for agent processing
-        result_dict = {
-            "original_query": query,
-            "sub_queries": sub_questions,
-            "raw_results": [result.model_dump() for result in cleaned_results],
-            "processing_time": 0.0  # Will be calculated at agent level
-        }
-        print(f"🎯 TAVILY TOOL DEBUG: Returning dict with {len(result_dict['raw_results'])} raw results")
-        return result_dict
+        # CRITICAL FIX: Return ResearchPipelineModel instead of dict to prevent infinite agent loop
+        return ResearchPipelineModel(
+            original_query=query,
+            sub_queries=sub_questions,
+            results=cleaned_results,  # Already ResearchItem objects
+            pipeline_type="tavily",
+            total_results=len(cleaned_results),
+            processing_time=0.0  # Will be calculated at agent level
+        )
                
     except Exception as e:
         print(f"❌ TAVILY TOOL DEBUG: Exception caught: {str(e)}")
         print(f"❌ TAVILY TOOL DEBUG: Exception type: {type(e)}")
         import traceback
         print(f"❌ TAVILY TOOL DEBUG: Traceback: {traceback.format_exc()}")
-        return {
-            "error": f"Error performing Tavily research: {str(e)}",
-            "original_query": query,
-            "sub_queries": [],
-            "raw_results": [],
-            "processing_time": 0.0
-        }
-
-
-async def process_tavily_research_request(query: str) -> AgentResponse:
-    """Process Tavily research request."""
-    start_time = asyncio.get_event_loop().time()
-    
-    try:
-        deps = TavilyResearchDeps()
-        
-        if not deps.api_key:
-            return AgentResponse(
-                agent_name="TavilyResearchAgent",
-                success=False,
-                error="Tavily API key not configured"
-            )
-        
-        # Expand query into sub-questions
-        sub_questions = await expand_query_to_subquestions(query)
-        
-        # Initialize Tavily client
-        client = TavilyClient(api_key=deps.api_key)
-        
-        # Perform parallel searches
-        search_tasks = [
-            search_tavily(client, question, deps.max_results // 3)
-            for question in sub_questions
-        ]
-        
-        search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
-        
-        # Combine and clean results
-        all_results = []
-        for results in search_results:
-            if isinstance(results, list):
-                all_results.extend(results)
-        
-        # Content cleaning is handled in parallel within perform_tavily_research tool
-        
-        cleaned_results = clean_and_format_results(all_results, query)
-        
-        # Create result model
-        result = ResearchPipelineModel(
+        return ResearchPipelineModel(
             original_query=query,
-            sub_queries=sub_questions,
-            results=cleaned_results,
+            sub_queries=[],
+            results=[],
             pipeline_type="tavily",
-            total_results=len(cleaned_results),
-            processing_time=asyncio.get_event_loop().time() - start_time
+            total_results=0,
+            processing_time=0.0
         )
-        
-        processing_time = asyncio.get_event_loop().time() - start_time
-        
-        return AgentResponse(
-            agent_name="TavilyResearchAgent",
-            success=True,
-            data=result.model_dump(),
-            processing_time=processing_time
-        )
-        
-    except Exception as e:
-        processing_time = asyncio.get_event_loop().time() - start_time
-        return AgentResponse(
-            agent_name="TavilyResearchAgent",
-            success=False,
-            error=str(e),
-            processing_time=processing_time
-        )
+
+
+# DELETED: Legacy function removed - use tavily_research_agent Pydantic AI agent instead

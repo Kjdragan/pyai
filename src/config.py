@@ -91,7 +91,7 @@ class Config:
     # Prevent agents from expanding queries on their own unless explicitly allowed
     ALLOW_AGENT_QUERY_EXPANSION: bool = os.getenv("ALLOW_AGENT_QUERY_EXPANSION", "false").lower() == "true"
     # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
-    GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.4"))
+    GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.2"))
 
     # Content cleaning behavior
     CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "true").lower() == "true"

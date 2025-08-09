@@ -19,6 +19,7 @@ except ImportError:
 from openai import APIError, RateLimitError, APIConnectionError
 
 from config import config
+from telemetry.run_summary import run_summary  # dev-only tracing summary
 
 
 class ErrorCategory(Enum):
@@ -175,6 +176,10 @@ class PydanticAIRetryHandler:
                     fallback_model = config.get_fallback_model(str(current_model))
                     if fallback_model != str(current_model):
                         self.logger.info(f"Agent {agent_name} attempting model fallback: {current_model} -> {fallback_model}")
+                        try:
+                            run_summary.inc_retry(1)
+                        except Exception:
+                            pass
                         fallback_attempted = True
                         # Don't increment attempt counter for fallback
                         continue
@@ -183,6 +188,10 @@ class PydanticAIRetryHandler:
                 if error_category == ErrorCategory.TRANSIENT:
                     delay = self.calculate_delay(attempt)
                     self.logger.info(f"Agent {agent_name} waiting {delay:.2f}s before retry")
+                    try:
+                        run_summary.inc_retry(1)
+                    except Exception:
+                        pass
                     await asyncio.sleep(delay)
 
 

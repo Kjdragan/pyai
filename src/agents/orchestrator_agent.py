@@ -16,12 +16,14 @@ from models import (
     ReportGenerationModel, ResearchItem, QueryIntentAnalysis
 )
 from config import config
-from agents.youtube_agent import process_youtube_request
-from agents.weather_agent import process_weather_request
-from agents.research_tavily_agent import process_tavily_research_request
-from agents.report_writer_agent import process_report_request
+# Legacy imports removed - using Pydantic AI agents directly
 from research_logger import ResearchDataLogger, MasterStateLogger
 from state_manager import MasterStateManager
+from telemetry.run_summary import run_summary  # dev-only tracing summary
+try:
+    import logfire  # type: ignore
+except Exception:  # pragma: no cover
+    logfire = None
 
 
 class OrchestratorDeps:
@@ -407,6 +409,17 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     """
     import asyncio
     
+    # Idempotency guard: if workflow already executed in this run, return cached summary
+    if "OptimalWorkflow" in ctx.deps.completed_agents:
+        cached = ctx.deps.agent_results.get("OptimalWorkflow")
+        if cached and cached.get('success'):
+            await stream_update(StreamingUpdate(
+                update_type="status",
+                agent_name="Orchestrator",
+                message="Using cached optimal workflow result"
+            ))
+            return cached.get('data', {}).get('summary', 'Optimal workflow already executed.')
+    
     # Analyze what agents are needed using LLM intelligence instead of regex patterns
     intent_analysis = await classify_query_intent_llm(user_query)
     needs_youtube = intent_analysis.needs_youtube
@@ -499,8 +512,22 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     if phase2_result and "failed" not in phase2_result:
         total_success += 1
     
-    return f"Optimal workflow executed: Phase 1 ({len(phase1_names)} parallel agents) -> Phase 2 (report). " \
-           f"Total success: {total_success} agents{phase2_result}"
+    final_summary = (
+        f"Optimal workflow executed: Phase 1 ({len(phase1_names)} parallel agents) -> Phase 2 (report). "
+        f"Total success: {total_success} agents{phase2_result}"
+    )
+    
+    # Cache and mark completion to prevent repeated executions by the LLM router
+    ctx.deps.agent_results["OptimalWorkflow"] = {
+        'success': True,
+        'data': {'summary': final_summary},
+        'error': None,
+    }
+    if "OptimalWorkflow" not in ctx.deps.completed_agents:
+        ctx.deps.completed_agents.add("OptimalWorkflow")
+        ctx.deps.agents_used.append("OptimalWorkflow")
+    
+    return final_summary
 
 @orchestrator_agent.tool
 async def generate_trace_analysis_report(ctx: RunContext[OrchestratorDeps], analysis_request: str) -> str:
@@ -740,7 +767,25 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
             )
             ctx.deps.errors.append(f"Weather: {str(e)}")
         
+        # Cache the result regardless of success/failure
+        ctx.deps.agent_results["WeatherAgent"] = {
+            'success': response.success,
+            'data': response.data,
+            'error': response.error
+        }
+        
         if response.success:
+            # Create WeatherModel and store in centralized state for access by other agents
+            if ctx.deps.state_manager:
+                from models import WeatherModel
+                weather_model = WeatherModel(**response.data)
+                ctx.deps.state_manager.update_weather_data("WeatherAgent", weather_model)
+            
+            # Mark as completed to prevent duplication
+            if "WeatherAgent" not in ctx.deps.completed_agents:
+                ctx.deps.completed_agents.add("WeatherAgent")
+                ctx.deps.agents_used.append("WeatherAgent")
+            
             return f"Weather agent completed successfully. Retrieved current weather and forecast for {location}."
         else:
             return f"Weather agent failed: {response.error}"
@@ -753,6 +798,18 @@ async def dispatch_to_weather_agent(ctx: RunContext[OrchestratorDeps], location:
 async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: str, pipeline: str = "both") -> str:
     """Dispatch job to research agents (Tavily and/or Serper) with centralized query expansion."""
     try:
+        # CACHE CHECK: prevent duplicate runs
+        if "ResearchAgents" in ctx.deps.completed_agents:
+            cached_result = ctx.deps.agent_results.get("ResearchAgents")
+            if cached_result and cached_result.get('success'):
+                await stream_update(StreamingUpdate(
+                    update_type="status",
+                    agent_name="Orchestrator",
+                    message="Using cached research results"
+                ))
+                total = cached_result.get('data', {}).get('total_results', 0)
+                return f"Research already completed (cached). Total results: {total}"
+
         # PERFORMANCE FIX: Only add ResearchAgents to agents_used once
         if "ResearchAgents" not in ctx.deps.agents_used:
             ctx.deps.agents_used.append("ResearchAgents")
@@ -788,11 +845,11 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                 tavily_deps = TavilyResearchDeps()
                 
                 # Include centralized sub-queries in the prompt to prevent agent from generating its own
-                sub_queries_text = "\\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+                sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
                 
                 tavily_result = await tavily_research_agent.run(
                     f"Use your perform_tavily_research tool to conduct comprehensive research on: {query}. "
-                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\\n{sub_queries_text}\\n"
+                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
                     f"Please search for real web sources and return structured results with actual URLs and data.",
                     deps=tavily_deps,
                     usage=ctx.usage
@@ -830,11 +887,11 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                 serper_deps = SerperResearchDeps()
                 
                 # Use the same centralized sub-queries for Serper to prevent duplication
-                sub_queries_text = "\\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+                sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
                 
                 serper_result = await serper_research_agent.run(
                     f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
-                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\\n{sub_queries_text}\\n"
+                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
                     f"Please search for real web sources and return structured results with actual URLs and data.",
                     deps=serper_deps,
                     usage=ctx.usage
@@ -915,6 +972,18 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                 # Fallback to old logging if state manager not available
                 logger = ResearchDataLogger()
                 logger.log_research_state(combined_research)
+
+        # Cache aggregated result metadata and mark completion on success
+        ctx.deps.agent_results["ResearchAgents"] = {
+            'success': success_count > 0,
+            'data': {
+                'pipeline': 'combined',
+                'total_results': len(all_research_results) if all_research_results else total_results
+            },
+            'error': None if success_count > 0 else "No research results returned"
+        }
+        if success_count > 0 and "ResearchAgents" not in ctx.deps.completed_agents:
+            ctx.deps.completed_agents.add("ResearchAgents")
         
         return f"Research completed. {success_count}/{len(results)} pipelines successful. Total results: {total_results}"
         
@@ -1106,6 +1175,27 @@ async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdat
             master_output, 
             state_summary=state_manager.get_state_summary()
         )
+        # DEV-ONLY TRACING: emit a consolidated run summary to Logfire and logs
+        try:
+            run_id = state_manager.orchestrator_id
+            summary_payload = run_summary.emit({
+                "run_id": run_id,
+                "job_type": master_output.job_request.job_type if hasattr(master_output, "job_request") and master_output.job_request else job_request.job_type,
+                "agents_used": len(master_output.agents_used) if hasattr(master_output, "agents_used") else len(deps.agents_used),
+                "success": master_output.success,
+                "processing_time_seconds": round(processing_time, 2),
+            })
+            # Also attach as a lightweight event via standard logging
+            MasterStateLogger().logger.info("run_summary_emitted", extra={"event_type": "run_summary", **summary_payload})
+            # Emit a Logfire event for quick UI filtering
+            if logfire is not None:
+                try:
+                    logfire.info("run_completed", **summary_payload)
+                except Exception:
+                    pass
+        except Exception:
+            # Never fail the run for telemetry issues
+            pass
         
         # Stream the final result
         yield StreamingUpdate(
