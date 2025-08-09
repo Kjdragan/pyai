@@ -91,7 +91,7 @@ async def search_tavily(
         search_params = {
             "query": query,
             "search_depth": config.TAVILY_SEARCH_DEPTH,  # Configurable search depth
-            "max_results": min(max_results, 10),  # Reasonable limit
+            "max_results": config.TAVILY_MAX_RESULTS,  # Get full result set from API
             "include_raw_content": True,  # Better precision with advanced depth
             "include_answer": True,  # Get LLM-generated answer
             "time_range": time_range  # Configurable time range
@@ -117,10 +117,15 @@ async def search_tavily(
             return []
         
         results = []
+        raw_result_count = len(response.get("results", []))
+        filtered_count = 0
+        
         for item in response.get("results", []):
             # Filter by relevance score (best practice)
             score = item.get("score", 0)
             if score < config.TAVILY_MIN_SCORE:  # Skip low-relevance results
+                filtered_count += 1
+                print(f"🚮 FILTERED: Low relevance score {score:.3f} < {config.TAVILY_MIN_SCORE} for {item.get('url', 'unknown')}")
                 continue
             
             # Get basic snippet from Tavily
@@ -189,11 +194,15 @@ async def search_tavily(
         # Sort by relevance score (best practice)
         results.sort(key=lambda x: x.relevance_score or 0, reverse=True)
         
-        # Log quality summary for this search
-        if results:
-            scraped_count = sum(1 for r in results if r.content_scraped)
-            avg_score = sum(r.relevance_score for r in results if r.relevance_score) / len([r for r in results if r.relevance_score])
-            print(f"📈 TAVILY QUALITY: {len(results)} results, avg score: {avg_score:.2f}, {scraped_count} scraped ({scraped_count/len(results)*100:.1f}%)")
+        # Log comprehensive filtering and quality summary  
+        scraped_count = sum(1 for r in results if r.content_scraped) if results else 0
+        avg_score = (sum(r.relevance_score for r in results if r.relevance_score) / len([r for r in results if r.relevance_score])) if results and any(r.relevance_score for r in results) else 0
+        filter_rate = (filtered_count / raw_result_count * 100) if raw_result_count > 0 else 0
+        
+        print(f"📈 TAVILY OPTIMIZATION RESULTS:")
+        print(f"   • Raw API results: {raw_result_count}, Quality filtered: {filtered_count} ({filter_rate:.1f}%)")
+        print(f"   • Final quality results: {len(results)}, Avg score: {avg_score:.3f}")
+        print(f"   • Scraped: {scraped_count}/{len(results) if results else 0} ({(scraped_count/len(results)*100) if results else 0:.1f}%)")
         
         return results
         

@@ -184,19 +184,33 @@ async def clean_multiple_contents_batched(
             small_items.append((content, topic, source_url))
             item_indices[len(small_items) - 1] = idx
     
-    # Process small items in batches AND large items with chunking - ALL IN PARALLEL
+    # Process items based on parallelization strategy
     all_tasks = []
     
-    # Add small item batch tasks
-    for i in range(0, len(small_items), batch_size):
-        batch = small_items[i:i+batch_size]
-        task = _process_content_batch(batch)
-        all_tasks.append(('small_batch', i // batch_size, task))
-    
-    # Add large item chunking tasks (each item gets its own parallel processing)
-    for idx, (content, topic, source_url) in enumerate(large_items):
-        task = _process_chunked_content(content, topic, source_url)
-        all_tasks.append(('large_item', idx, task))
+    if config.MAX_PARALLEL_CLEANING:
+        # MAXIMUM PARALLELIZATION: Send every item as individual LLM call
+        get_logger().info(f"🚀 MAXIMUM PARALLELIZATION ENABLED: Processing {len(small_items)} small items individually")
+        
+        # Process each small item individually (no batching)
+        for idx, (content, topic, source_url) in enumerate(small_items):
+            task = clean_scraped_content(content, topic, source_url)  # Direct individual cleaning
+            all_tasks.append(('individual_small', idx, task))
+            
+        # Large items still use chunking (already optimally parallel)
+        for idx, (content, topic, source_url) in enumerate(large_items):
+            task = _process_chunked_content(content, topic, source_url)
+            all_tasks.append(('large_item', idx, task))
+    else:
+        # BATCH PROCESSING: Use batches for small items (original behavior)
+        for i in range(0, len(small_items), batch_size):
+            batch = small_items[i:i+batch_size]
+            task = _process_content_batch(batch)
+            all_tasks.append(('small_batch', i // batch_size, task))
+        
+        # Add large item chunking tasks (each item gets its own parallel processing)
+        for idx, (content, topic, source_url) in enumerate(large_items):
+            task = _process_chunked_content(content, topic, source_url)
+            all_tasks.append(('large_item', idx, task))
     
     get_logger().info(f"🚀 Launching {len(all_tasks)} parallel processing tasks ({len([t for t in all_tasks if t[0] == 'small_batch'])} batches + {len([t for t in all_tasks if t[0] == 'large_item'])} chunked items)")
     
@@ -206,10 +220,10 @@ async def clean_multiple_contents_batched(
     # Reconstruct results in original order
     final_results = [None] * len(content_items)
     
-    # Process small batch results
-    small_batch_idx = 0
+    # Process small item results (batch or individual)
     for task_type, task_idx, _ in all_tasks:
         if task_type == 'small_batch':
+            # Handle batched results (original behavior)
             batch_results = task_results[all_tasks.index((task_type, task_idx, _))]
             if isinstance(batch_results, Exception):
                 get_logger().error(f"❌ Small batch {task_idx} failed: {batch_results}")
@@ -226,6 +240,16 @@ async def clean_multiple_contents_batched(
                     if batch_start + i < len(small_items):
                         original_idx = item_indices[batch_start + i]
                         final_results[original_idx] = result
+                        
+        elif task_type == 'individual_small':
+            # Handle individual results (maximum parallelization)
+            result = task_results[all_tasks.index((task_type, task_idx, _))]
+            original_idx = item_indices[task_idx]
+            if isinstance(result, Exception):
+                get_logger().error(f"❌ Individual small item {task_idx} failed: {result}")
+                final_results[original_idx] = (content_items[original_idx][0], False)
+            else:
+                final_results[original_idx] = result
     
     # Process large item results
     for task_type, task_idx, _ in all_tasks:

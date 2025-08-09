@@ -69,7 +69,7 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
     
     payload = {
         "q": query,
-        "num": max_results,
+        "num": config.SERPER_MAX_RESULTS,  # Use optimized result count
         "hl": "en",
         "gl": "us"
     }
@@ -82,19 +82,27 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
             data = response.json()
             results = []
             
-            # Process organic results with intelligent quality grading
+            # Process organic results with position-based quality scoring
             raw_results = []
-            for i, item in enumerate(data.get("organic", [])[:max_results]):
+            organic_results = data.get("organic", [])[:config.SERPER_MAX_RESULTS]  # Use full result set
+            
+            print(f"📊 SERPER OPTIMIZATION: Processing {len(organic_results)} results from API")
+            
+            for i, item in enumerate(organic_results):
                 basic_snippet = item.get("snippet", "")
                 source_url = item.get("link", "")
                 
-                # Create initial research item for quality evaluation (no scraping yet)
+                # Calculate position-based relevance score (1.0 for position 1, decreasing to 0.05 for position 20)
+                # Google's organic ranking provides implicit quality - higher positions = higher quality
+                position_score = max(0.05, 1.0 - (i * 0.05))  # Position 1 = 1.0, Position 20 = 0.05
+                
+                # Create initial research item with position-based scoring
                 result = ResearchItem(
                     query_variant=query,
                     source_url=source_url,
                     title=item.get("title", ""),
                     snippet=basic_snippet,
-                    relevance_score=None,  # Will be calculated by quality grader
+                    relevance_score=position_score,  # Position-based quality score
                     timestamp=now(),
                     content_scraped=False,
                     scraping_error=None,
@@ -102,6 +110,8 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                     scraped_content=None
                 )
                 raw_results.append(result)
+                
+                print(f"🎯 SERPER QUALITY: Position {i+1} → Score {position_score:.3f} for {source_url}")
             
             # Apply intelligent quality grading to determine what to scrape
             print(f"📊 SERPER DEBUG: Applying quality grading to {len(raw_results)} results")
@@ -148,9 +158,16 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                 
                 final_results.append(result)
             
-            # Log quality summary
+            # Log comprehensive optimization summary
+            scraped_count = sum(1 for r in final_results if r.content_scraped)
+            avg_position_score = sum(r.relevance_score for r in final_results if r.relevance_score) / len(final_results) if final_results else 0
             quality_summary = quality_grader.get_quality_summary(final_results)
-            print(f"📈 SERPER QUALITY SUMMARY: {quality_summary}")
+            
+            print(f"📈 SERPER OPTIMIZATION RESULTS:")
+            print(f"   • API results processed: {len(organic_results)} (max: {config.SERPER_MAX_RESULTS})")
+            print(f"   • Position-based avg score: {avg_position_score:.3f}")
+            print(f"   • Scraped: {scraped_count}/{len(final_results)} ({(scraped_count/len(final_results)*100) if final_results else 0:.1f}%)")
+            print(f"   • Quality grader summary: {quality_summary}")
             
             return final_results
             

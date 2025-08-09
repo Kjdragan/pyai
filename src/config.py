@@ -63,6 +63,10 @@ class Config:
     TAVILY_MIN_SCORE: float = float(os.getenv("TAVILY_MIN_SCORE", "0.5"))
     TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.6"))  # Scrape good quality results
     TAVILY_RATE_LIMIT_RPS: int = int(os.getenv("TAVILY_RATE_LIMIT_RPS", "5"))
+    TAVILY_MAX_RESULTS: int = int(os.getenv("TAVILY_MAX_RESULTS", "50"))  # Get full result set from API
+
+    # Serper-specific Settings
+    SERPER_MAX_RESULTS: int = int(os.getenv("SERPER_MAX_RESULTS", "20"))  # Maximum reliable results per query
 
     # Streamlit Settings
     STREAMLIT_PORT: int = int(os.getenv("STREAMLIT_PORT", "8501"))
@@ -92,6 +96,13 @@ class Config:
     ALLOW_AGENT_QUERY_EXPANSION: bool = os.getenv("ALLOW_AGENT_QUERY_EXPANSION", "false").lower() == "true"
     # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
     GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.2"))
+
+    # Query Strategy Settings
+    INCLUDE_ORIGINAL_QUERY: bool = os.getenv("INCLUDE_ORIGINAL_QUERY", "true").lower() == "true"  # Process 4 queries instead of 3
+    ENABLE_URL_DEDUPLICATION: bool = os.getenv("ENABLE_URL_DEDUPLICATION", "true").lower() == "true"  # Cross-API deduplication
+    
+    # Content Processing Optimization
+    MAX_PARALLEL_CLEANING: bool = os.getenv("MAX_PARALLEL_CLEANING", "true").lower() == "true"  # Remove batch limits for LLM cleaning
 
     # Content cleaning behavior - PDF processing now enabled with local text extraction
     CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "false").lower() == "true"  # Enable PDF processing by default
