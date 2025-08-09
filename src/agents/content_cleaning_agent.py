@@ -153,10 +153,11 @@ async def clean_multiple_contents_batched(
 ) -> list[tuple[str, bool]]:
     """
     Clean multiple scraped contents using batch API calls for 4x speedup.
+    Automatically handles large content (>250K chars) with parallel chunking.
     
     Args:
         content_items: List of (content, topic, source_url) tuples
-        batch_size: Number of items to process per API call
+        batch_size: Number of items to process per API call (ignored for chunked content)
     
     Returns:
         List of (cleaned_content, success_flag) tuples in same order
@@ -167,18 +168,190 @@ async def clean_multiple_contents_batched(
     get_logger().info(f"🧹 Starting batched cleaning of {len(content_items)} items (batch_size={batch_size})")
     start_time = asyncio.get_event_loop().time()
     
-    # Process items in batches
-    all_results = []
-    for i in range(0, len(content_items), batch_size):
-        batch = content_items[i:i+batch_size]
-        batch_results = await _process_content_batch(batch)
-        all_results.extend(batch_results)
+    # Separate small and large content items
+    small_items = []
+    large_items = []
+    item_indices = {}  # Track original positions
+    
+    CHUNK_THRESHOLD = 250000
+    
+    for idx, (content, topic, source_url) in enumerate(content_items):
+        if len(content) > CHUNK_THRESHOLD:
+            large_items.append((content, topic, source_url))
+            item_indices[len(large_items) - 1 + 1000] = idx  # Offset large items by 1000
+            get_logger().info(f"📄 Large content detected: {source_url} ({len(content):,} chars) - will process with chunking")
+        else:
+            small_items.append((content, topic, source_url))
+            item_indices[len(small_items) - 1] = idx
+    
+    # Process small items in batches AND large items with chunking - ALL IN PARALLEL
+    all_tasks = []
+    
+    # Add small item batch tasks
+    for i in range(0, len(small_items), batch_size):
+        batch = small_items[i:i+batch_size]
+        task = _process_content_batch(batch)
+        all_tasks.append(('small_batch', i // batch_size, task))
+    
+    # Add large item chunking tasks (each item gets its own parallel processing)
+    for idx, (content, topic, source_url) in enumerate(large_items):
+        task = _process_chunked_content(content, topic, source_url)
+        all_tasks.append(('large_item', idx, task))
+    
+    get_logger().info(f"🚀 Launching {len(all_tasks)} parallel processing tasks ({len([t for t in all_tasks if t[0] == 'small_batch'])} batches + {len([t for t in all_tasks if t[0] == 'large_item'])} chunked items)")
+    
+    # Execute ALL tasks in parallel - no sequential waiting!
+    task_results = await asyncio.gather(*[task for _, _, task in all_tasks], return_exceptions=True)
+    
+    # Reconstruct results in original order
+    final_results = [None] * len(content_items)
+    
+    # Process small batch results
+    small_batch_idx = 0
+    for task_type, task_idx, _ in all_tasks:
+        if task_type == 'small_batch':
+            batch_results = task_results[all_tasks.index((task_type, task_idx, _))]
+            if isinstance(batch_results, Exception):
+                get_logger().error(f"❌ Small batch {task_idx} failed: {batch_results}")
+                # Fill with failure results
+                batch_start = task_idx * batch_size
+                batch_end = min(batch_start + batch_size, len(small_items))
+                for i in range(batch_start, batch_end):
+                    original_idx = item_indices[i]
+                    final_results[original_idx] = (content_items[original_idx][0], False)
+            else:
+                # Distribute batch results
+                batch_start = task_idx * batch_size
+                for i, result in enumerate(batch_results):
+                    if batch_start + i < len(small_items):
+                        original_idx = item_indices[batch_start + i]
+                        final_results[original_idx] = result
+    
+    # Process large item results
+    for task_type, task_idx, _ in all_tasks:
+        if task_type == 'large_item':
+            result = task_results[all_tasks.index((task_type, task_idx, _))]
+            original_idx = item_indices[task_idx + 1000]  # Remove offset
+            if isinstance(result, Exception):
+                get_logger().error(f"❌ Large item {task_idx} failed: {result}")
+                final_results[original_idx] = (content_items[original_idx][0], False)
+            else:
+                final_results[original_idx] = result
     
     total_time = asyncio.get_event_loop().time() - start_time
-    success_count = sum(1 for _, success in all_results if success)
+    success_count = sum(1 for result in final_results if result and result[1])
     
-    get_logger().info(f"✅ Batched cleaning completed: {success_count}/{len(content_items)} successful in {total_time:.2f}s")
-    return all_results
+    get_logger().info(f"✅ PARALLEL cleaning completed: {success_count}/{len(content_items)} successful in {total_time:.2f}s")
+    get_logger().info(f"📊 Processed: {len(small_items)} regular items in batches + {len(large_items)} large items with chunking")
+    
+    return final_results
+
+
+def _chunk_large_content(content: str, max_chunk_size: int = 250000) -> list[str]:
+    """
+    Split large content into chunks of approximately max_chunk_size characters.
+    Tries to break at sentence boundaries when possible to preserve context.
+    """
+    if len(content) <= max_chunk_size:
+        return [content]
+    
+    chunks = []
+    current_pos = 0
+    
+    while current_pos < len(content):
+        # Calculate chunk end position
+        chunk_end = current_pos + max_chunk_size
+        
+        if chunk_end >= len(content):
+            # Last chunk - take everything remaining
+            chunks.append(content[current_pos:])
+            break
+        
+        # Try to find a good breaking point (sentence end) within the last 10% of the chunk
+        search_start = max(current_pos + int(max_chunk_size * 0.9), current_pos + 1000)
+        search_text = content[search_start:chunk_end]
+        
+        # Look for sentence endings (periods, exclamation, question marks)
+        sentence_breaks = []
+        for i, char in enumerate(search_text):
+            if char in '.!?' and i < len(search_text) - 1:
+                # Check if next char is whitespace or end of content
+                next_char = search_text[i + 1] if i + 1 < len(search_text) else ' '
+                if next_char in ' \n\t':
+                    sentence_breaks.append(search_start + i + 1)
+        
+        if sentence_breaks:
+            # Use the last sentence break found
+            actual_end = sentence_breaks[-1]
+        else:
+            # No good break point found, just cut at max_chunk_size
+            actual_end = chunk_end
+        
+        chunks.append(content[current_pos:actual_end])
+        current_pos = actual_end
+    
+    return chunks
+
+
+async def _process_chunked_content(content: str, topic: str, source_url: str) -> tuple[str, bool]:
+    """
+    Process large content by chunking it and processing chunks in parallel.
+    
+    Args:
+        content: Large content to process
+        topic: Topic for context
+        source_url: Source URL for logging
+        
+    Returns:
+        Tuple of (cleaned_content, success_flag)
+    """
+    CHUNK_SIZE = 250000  # 250K characters per chunk
+    
+    if len(content) <= CHUNK_SIZE:
+        # Content is small enough, process normally
+        return await clean_scraped_content(content, topic, source_url)
+    
+    get_logger().info(f"📄 Large content detected ({len(content):,} chars) from {source_url} - chunking into {CHUNK_SIZE:,} char pieces")
+    
+    # Split into chunks
+    chunks = _chunk_large_content(content, CHUNK_SIZE)
+    get_logger().info(f"✂️ Content split into {len(chunks)} chunks - processing ALL IN PARALLEL")
+    
+    # Process ALL chunks in parallel (no batching, no sequential waiting)
+    chunk_tasks = []
+    for i, chunk in enumerate(chunks):
+        get_logger().debug(f"🚀 Launching parallel processing for chunk {i+1}/{len(chunks)} ({len(chunk):,} chars)")
+        task = clean_scraped_content(chunk, f"{topic} (Part {i+1}/{len(chunks)})", f"{source_url}#chunk{i+1}")
+        chunk_tasks.append(task)
+    
+    # Wait for ALL chunks to complete in parallel
+    chunk_results = await asyncio.gather(*chunk_tasks, return_exceptions=True)
+    
+    # Reassemble results
+    cleaned_chunks = []
+    success_count = 0
+    
+    for i, result in enumerate(chunk_results):
+        if isinstance(result, Exception):
+            get_logger().error(f"❌ Chunk {i+1} failed with exception: {result}")
+            # Use original chunk on failure
+            cleaned_chunks.append(chunks[i])
+        else:
+            cleaned_content, success = result
+            if success:
+                cleaned_chunks.append(cleaned_content)
+                success_count += 1
+            else:
+                get_logger().warning(f"⚠️ Chunk {i+1} cleaning failed, using original")
+                cleaned_chunks.append(chunks[i])
+    
+    # Combine all chunks
+    final_content = " ".join(cleaned_chunks)
+    overall_success = success_count >= len(chunks) * 0.5  # Success if at least 50% of chunks succeeded
+    
+    get_logger().info(f"✅ Chunked processing complete: {success_count}/{len(chunks)} chunks succeeded ({len(content):,} → {len(final_content):,} chars)")
+    
+    return final_content, overall_success
 
 
 async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tuple[str, bool]]:
@@ -186,88 +359,59 @@ async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tupl
     if len(batch) == 1:
         # Single item - use regular cleaning
         content, topic, source_url = batch[0]
+        get_logger().info(f"🔄 Processing single item batch: {source_url}")
         return [await clean_scraped_content(content, topic, source_url)]
     
-    # PERFORMANCE FIX: Handle PDFs within batch instead of falling back to sequential
-    # This maintains batch efficiency while properly handling PDF content
-    pdf_items = []
-    non_pdf_items = []
+    get_logger().info(f"🚀 Processing batch of {len(batch)} items using batched API call")
     
-    # Separate PDFs from non-PDFs
-    for i, (content, topic, source_url) in enumerate(batch):
-        if config.CLEANING_SKIP_PDFS and _is_pdf_url(source_url):
-            pdf_items.append((i, content, topic, source_url))
-        else:
-            non_pdf_items.append((i, content, topic, source_url))
-    
-    # Process both types efficiently
-    results = [None] * len(batch)  # Preserve order
-    
-    # Process non-PDFs in batch if any exist
-    if non_pdf_items:
-        non_pdf_batch = [(content, topic, source_url) for _, content, topic, source_url in non_pdf_items]
-        batch_prompt = _create_batch_prompt(non_pdf_batch)
+    # Process all items in batch (PDFs now handled by scraper, so no special logic needed)
+    try:
+        batch_prompt = _create_batch_prompt(batch)
+        get_logger().debug(f"📝 Batch prompt created, length: {len(batch_prompt)} chars")
         
-        try:
-            result = await content_cleaning_agent.run(batch_prompt)
-            cleaned_contents = _parse_batch_response(result.data, len(non_pdf_batch))
-            
-            # Apply results back to correct positions
-            for idx, (original_idx, original_content, topic, source_url) in enumerate(non_pdf_items):
-                if idx < len(cleaned_contents) and cleaned_contents[idx].strip():
-                    cleaned = cleaned_contents[idx].strip()
-                    results[original_idx] = (cleaned, True)
-                    
-                    # Log metrics
-                    reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
-                    get_logger().info(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
-                    try:
-                        run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(cleaned), success=True)
-                    except Exception:
-                        pass
-                else:
-                    # Fallback to original content
-                    results[original_idx] = (original_content, False)
-                    get_logger().error(f"❌ Batch cleaning failed for {source_url}, using original")
-                    try:
-                        run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(original_content), success=False)
-                    except Exception:
-                        pass
+        result = await content_cleaning_agent.run(batch_prompt)
+        get_logger().debug(f"✅ LLM response received, length: {len(result.data)} chars")
         
-        except Exception as e:
-            get_logger().error(f"❌ Batch processing failed for non-PDFs: {e}")
-            # Fallback for non-PDFs only
-            for original_idx, original_content, topic, source_url in non_pdf_items:
-                individual_result = await clean_scraped_content(original_content, topic, source_url)
-                results[original_idx] = individual_result
-    
-    # Process PDFs individually with PDF-aware cleaning (parallel if multiple PDFs)
-    if pdf_items:
-        get_logger().info(f"📄 Processing {len(pdf_items)} PDF items with PDF-aware cleaning")
+        cleaned_contents = _parse_batch_response(result.data, len(batch))
+        get_logger().info(f"🎯 Batch parsing successful: {len(cleaned_contents)} items parsed from response")
         
-        if len(pdf_items) == 1:
-            # Single PDF - process directly
-            original_idx, content, topic, source_url = pdf_items[0]
-            results[original_idx] = await clean_scraped_content(content, topic, source_url)
-        else:
-            # Multiple PDFs - process in parallel for efficiency
-            pdf_tasks = [
-                clean_scraped_content(content, topic, source_url) 
-                for _, content, topic, source_url in pdf_items
-            ]
-            pdf_results = await asyncio.gather(*pdf_tasks, return_exceptions=True)
-            
-            # Apply PDF results back to correct positions
-            for (original_idx, _, _, _), pdf_result in zip(pdf_items, pdf_results):
-                if isinstance(pdf_result, tuple):
-                    results[original_idx] = pdf_result
-                else:
-                    # Exception occurred - use original content
-                    get_logger().error(f"❌ PDF cleaning failed: {pdf_result}")
-                    original_content = batch[original_idx][0]  # Get original content
-                    results[original_idx] = (original_content, False)
-    
-    return results
+        # Apply results back in correct order
+        results = []
+        for idx, (original_content, topic, source_url) in enumerate(batch):
+            if idx < len(cleaned_contents) and cleaned_contents[idx].strip():
+                cleaned = cleaned_contents[idx].strip()
+                results.append((cleaned, True))
+                
+                # Log metrics (less verbose)
+                reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
+                get_logger().debug(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
+                try:
+                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(cleaned), success=True)
+                except Exception:
+                    pass
+            else:
+                # Fallback to original content
+                results.append((original_content, False))
+                get_logger().warning(f"⚠️ Batch cleaning failed for {source_url}, using original content")
+                try:
+                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(original_content), success=False)
+                except Exception:
+                    pass
+        
+        get_logger().info(f"✅ Batch processing complete: {len([r for r in results if r[1]])} successes, {len([r for r in results if not r[1]])} failures")
+        return results
+        
+    except Exception as e:
+        get_logger().error(f"💥 CRITICAL: Batch processing completely failed: {e}")
+        get_logger().error(f"💥 Falling back to individual processing for {len(batch)} items - THIS CAUSES SEQUENTIAL API CALLS!")
+        
+        # Emergency fallback to individual processing
+        results = []
+        for content, topic, source_url in batch:
+            get_logger().warning(f"🔄 Individual fallback processing: {source_url}")
+            individual_result = await clean_scraped_content(content, topic, source_url)
+            results.append(individual_result)
+        return results
 
 
 def _create_batch_prompt(batch: list[tuple[str, str, str]]) -> str:

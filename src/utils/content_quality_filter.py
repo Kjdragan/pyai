@@ -39,8 +39,16 @@ class ContentQualityFilter:
         # Domains known for low-quality content aggregation
         self.low_quality_domains = {
             'pinterest.com', 'quora.com', 'reddit.com', 'stackoverflow.com',
-            'twitter.com', 'facebook.com', 'linkedin.com', 'instagram.com',
+            'twitter.com', 'facebook.com', 'instagram.com',
             'tiktok.com', 'youtube.com', 'wikipedia.org'
+        }
+        
+        # High-quality research and institutional domains
+        self.quality_domains = {
+            'energy.gov', 'ren21.net', 'irena.org', 'iea.org', 'nrel.gov',
+            'gwec.net', 'awea.org', 'windeurope.org', 'ipcc.ch', 'ieeeexplore.ieee.org',
+            'nature.com', 'sciencedirect.com', 'mdpi.com', 'eia.gov', 'doe.gov',
+            'un.org', 'worldbank.org', 'oecd.org'
         }
         
         # Keywords that often indicate spam/aggregator content
@@ -87,7 +95,7 @@ class ContentQualityFilter:
         return analysis
     
     def should_filter_content(self, content: str, url: str = "", title: str = "", 
-                            quality_threshold: float = 0.4) -> Tuple[bool, str]:
+                            quality_threshold: float = 0.4, is_pdf_content: bool = False) -> Tuple[bool, str]:
         """
         Determine if content should be filtered out before LLM processing.
         
@@ -96,6 +104,7 @@ class ContentQualityFilter:
             url: Source URL
             title: Content title
             quality_threshold: Minimum quality score (0-1)
+            is_pdf_content: Whether content was extracted from PDF (exempt from filtering)
             
         Returns:
             Tuple of (should_filter, reason)
@@ -104,18 +113,43 @@ class ContentQualityFilter:
         if len(content) < 200:
             return True, "Content too short (< 200 chars)"
         
+        # CRITICAL FIX: Exempt ALL PDF content from garbage filtering
+        # PDFs have already passed intelligent extraction - trust that process completely
+        if is_pdf_content:
+            return False, "PDF content exempt from garbage filtering"
+        
+        # FALLBACK: Also check URL patterns for PDFs (in case flag wasn't set properly)
+        if url and (url.lower().endswith('.pdf') or '.pdf?' in url.lower() or '.pdf' in url.lower()):
+            return False, "PDF URL detected - exempt from garbage filtering"
+        
+        # CRITICAL FIX: Protect quality domains from size-based filtering
+        # Research reports from authoritative sources are exactly what we need
+        domain_quality = self._analyze_domain_quality(url)
+        is_quality_domain = domain_quality > 0.8  # High-quality research domains
+        
         if len(content) > 50000:
-            return True, "Content too long (> 50k chars) - likely aggregator dump"
+            if is_quality_domain:
+                # Allow large content from quality domains (research reports, gov docs, etc.)
+                pass
+            else:
+                return True, "Content too long (> 50k chars) - likely aggregator dump"
         
         # Comprehensive analysis
         analysis = self.analyze_content_quality(content, url, title)
         
         if analysis['is_garbage']:
-            reasons = "; ".join(analysis['garbage_reasons'])
-            return True, f"Garbage content detected: {reasons}"
+            # ADDITIONAL PROTECTION: Even if flagged as garbage, protect quality domains with good scores
+            if is_quality_domain and analysis['overall_quality_score'] > 0.6:
+                pass  # Allow quality domain content even if some heuristics flag it
+            else:
+                reasons = "; ".join(analysis['garbage_reasons'])
+                return True, f"Garbage content detected: {reasons}"
         
         if analysis['overall_quality_score'] < quality_threshold:
-            return True, f"Quality score too low: {analysis['overall_quality_score']:.2f} < {quality_threshold}"
+            # RELAXED THRESHOLD: Lower threshold for quality domains
+            effective_threshold = quality_threshold * 0.7 if is_quality_domain else quality_threshold
+            if analysis['overall_quality_score'] < effective_threshold:
+                return True, f"Quality score too low: {analysis['overall_quality_score']:.2f} < {effective_threshold:.2f}"
         
         return False, ""
     
@@ -170,6 +204,10 @@ class ContentQualityFilter:
             domain = urlparse(url).netloc.lower()
             domain = domain.replace('www.', '')
             
+            # High-quality research domains get premium score
+            if domain in self.quality_domains:
+                return 0.95
+            
             if domain in self.low_quality_domains:
                 return 0.2
             
@@ -183,6 +221,10 @@ class ContentQualityFilter:
             
             if any(news_word in domain for news_word in ['news', 'journal', 'times', 'post']):
                 return 0.8
+                
+            # LinkedIn gets moderate score for professional content
+            if 'linkedin.com' in domain:
+                return 0.7
             
             return 0.6  # Default for unknown domains
             
@@ -283,30 +325,33 @@ class ContentQualityFilter:
         """Determine if content is garbage based on analysis."""
         reasons = []
         
-        # Critical failure conditions
-        if analysis['unique_word_ratio'] < 0.3:
+        # Critical failure conditions - RELAXED THRESHOLDS for better quality content
+        if analysis['unique_word_ratio'] < 0.25:  # More lenient for technical content
             reasons.append(f"Low unique word ratio: {analysis['unique_word_ratio']:.2f}")
         
-        if analysis['repetition_score'] > 0.4:
+        if analysis['repetition_score'] > 0.6:  # FIXED: Raised from 0.4 to 0.6 for technical reports
             reasons.append(f"High repetition: {analysis['repetition_score']:.2f}")
         
-        if analysis['navigation_ratio'] > 0.3:
+        if analysis['navigation_ratio'] > 0.4:  # More lenient
             reasons.append(f"Mostly navigation text: {analysis['navigation_ratio']:.2f}")
         
-        if analysis['spam_pattern_score'] > 0.2:
+        if analysis['spam_pattern_score'] > 0.4:  # FIXED: Raised from 0.2 to 0.4 for structured content
             reasons.append(f"Spam patterns detected: {analysis['spam_pattern_score']:.2f}")
         
-        if analysis['avg_sentence_length'] > 50 or analysis['avg_sentence_length'] < 3:
+        if analysis['avg_sentence_length'] > 80 or analysis['avg_sentence_length'] < 2:  # More lenient ranges
             reasons.append(f"Abnormal sentence length: {analysis['avg_sentence_length']:.1f}")
         
-        if analysis['domain_quality'] < 0.3:
+        if analysis['domain_quality'] < 0.25:  # More lenient
             reasons.append("Low-quality domain")
         
-        # Keyword dump detection
-        if analysis['word_count'] > 200 and analysis['sentence_count'] < 5:
+        # Keyword dump detection - more lenient
+        if analysis['word_count'] > 500 and analysis['sentence_count'] < 3:
             reasons.append("Likely keyword dump - too few sentences")
         
-        return len(reasons) >= 2, reasons  # Need multiple red flags
+        # QUALITY DOMAIN PROTECTION: High-quality domains need more red flags to be rejected
+        min_red_flags = 3 if analysis['domain_quality'] > 0.8 else 2
+        
+        return len(reasons) >= min_red_flags, reasons
 
 # Global filter instance
 content_filter = ContentQualityFilter()

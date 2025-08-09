@@ -175,8 +175,9 @@ class IntelligentScraper:
     def _is_pdf_url(self, url: str) -> bool:
         """Check if URL points to a PDF file."""
         try:
+            # Handle URLs with query parameters (like the GWEC example)
             path = urlparse(url or "").path.lower()
-            return path.endswith(".pdf")
+            return path.endswith(".pdf") or ".pdf" in path
         except Exception:
             return False
     

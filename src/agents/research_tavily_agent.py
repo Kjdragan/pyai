@@ -138,16 +138,31 @@ async def search_tavily(
             should_scrape = url and score >= config.TAVILY_SCRAPING_THRESHOLD
             if should_scrape:
                 print(f"🚀 DEBUG: Attempting to scrape {url}")
-                scraped_content = await scrape_url_content(url, max_chars=10000)  # Much higher limit for full content
-                if scraped_content:
-                    full_scraped_content = scraped_content
+                
+                # Use detailed scraper to get metadata about PDF extraction
+                from utils.intelligent_scraper import scrape_url_content_detailed
+                scraping_result = await scrape_url_content_detailed(url, max_chars=10000)
+                
+                if scraping_result.success:
+                    full_scraped_content = scraping_result.content
                     content_scraped = True
-                    scraped_content_length = len(scraped_content)
+                    scraped_content_length = len(scraping_result.content)
+                    # CRITICAL: Mark if content came from PDF extraction (exempt from garbage filtering)
+                    is_pdf_content = scraping_result.content_length > 50000  # Large content likely from PDF
+                    # More precise PDF detection using URL analysis
+                    from urllib.parse import urlparse
+                    try:
+                        path = urlparse(url).path.lower()
+                        if path.endswith('.pdf') or '.pdf' in path:
+                            is_pdf_content = True
+                            print(f"📄 TAVILY DEBUG: PDF content detected for {url} - will bypass garbage filtering")
+                    except:
+                        pass
                     print(f"✅ DEBUG: Successfully scraped {scraped_content_length} chars from {url}, content_scraped={content_scraped}")
-                    print(f"🔍 DEBUG: Scraped content preview (first 200 chars): {scraped_content[:200]}...")
+                    print(f"🔍 DEBUG: Scraped content preview (first 200 chars): {scraping_result.content[:200]}...")
                     print(f"🔍 DEBUG: Full scraped content will be saved to scraped_content field")
                 else:
-                    scraping_error = "Failed to scrape content"
+                    scraping_error = scraping_result.error_reason or "Failed to scrape content"
                     print(f"❌ DEBUG: Failed to scrape content from {url}, scraping_error={scraping_error}")
             else:
                 threshold = config.TAVILY_SCRAPING_THRESHOLD
@@ -165,7 +180,9 @@ async def search_tavily(
                 content_length=scraped_content_length,  # Length of scraped content only
                 scraped_content=full_scraped_content,  # Full scraped content for report generation
                 raw_content=full_scraped_content,  # Preserve exact raw scraped text
-                raw_content_length=scraped_content_length
+                raw_content_length=scraped_content_length,
+                # CRITICAL: Include PDF flag for garbage filter exemption
+                is_pdf_content=locals().get('is_pdf_content', False)
             )
             results.append(research_item)
         
@@ -215,6 +232,8 @@ def clean_and_format_results(results: List[ResearchItem], original_query: str) -
             scraping_error=item.scraping_error,
             content_length=item.content_length,
             scraped_content=cleaned_scraped_content,  # Full content for report generation (NOT truncated)
+            # CRITICAL: Preserve PDF flag for garbage filter exemption
+            is_pdf_content=getattr(item, 'is_pdf_content', False),
             # Preserve raw content and cleaning metadata
             raw_content=item.raw_content,
             raw_content_length=item.raw_content_length,
@@ -420,11 +439,13 @@ async def perform_tavily_research(ctx: RunContext[TavilyResearchDeps], query: st
                 item.pre_filter_content_length = len(item.scraped_content or "")
                 
                 # Apply quality filtering using comprehensive programmatic analysis
+                # CRITICAL: Pass PDF flag to exempt PDF content from garbage filtering
                 should_filter, filter_reason = content_filter.should_filter_content(
                     content=item.scraped_content,
                     url=item.source_url or "",
                     title=item.title or "",
-                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD  # Configurable threshold
+                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD,  # Configurable threshold
+                    is_pdf_content=getattr(item, 'is_pdf_content', False)  # PDF exemption flag
                 )
                 
                 # Get detailed quality analysis for insights

@@ -4,6 +4,7 @@ Uses Google Search via Serper API for high-quality research results.
 """
 
 import asyncio
+import httpx
 from typing import List, Optional
 from datetime import datetime
 from pydantic_ai import Agent, RunContext
@@ -115,18 +116,31 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                 
                 if should_scrape and result.source_url:
                     print(f"🚀 SERPER DEBUG: High-quality result - scraping {result.source_url} (score: {result.relevance_score:.2f})")
-                    scraped_content = await scrape_url_content(result.source_url, max_chars=10000)
                     
-                    if scraped_content:
-                        result.scraped_content = scraped_content
+                    # Use detailed scraper to get metadata about PDF extraction
+                    scraping_result = await scrape_url_content_detailed(result.source_url, max_chars=10000)
+                    
+                    if scraping_result.success:
+                        result.scraped_content = scraping_result.content
                         result.content_scraped = True
-                        result.content_length = len(scraped_content)
+                        result.content_length = len(scraping_result.content)
+                        # CRITICAL: Mark if content came from PDF extraction (exempt from garbage filtering)
+                        result.is_pdf_content = scraping_result.content_length > 50000  # Large content likely from PDF
+                        # More precise PDF detection using URL analysis
+                        from urllib.parse import urlparse
+                        try:
+                            path = urlparse(result.source_url).path.lower()
+                            if path.endswith('.pdf') or '.pdf' in path:
+                                result.is_pdf_content = True
+                                print(f"📄 SERPER DEBUG: PDF content detected for {result.source_url} - will bypass garbage filtering")
+                        except:
+                            pass
                         # Preserve exact raw scraped text for quote retention analysis
-                        result.raw_content = scraped_content
-                        result.raw_content_length = len(scraped_content)
+                        result.raw_content = scraping_result.content
+                        result.raw_content_length = len(scraping_result.content)
                         print(f"✅ SERPER DEBUG: Successfully scraped {result.content_length} chars from {result.source_url}")
                     else:
-                        result.scraping_error = "Failed to scrape content"
+                        result.scraping_error = scraping_result.error_reason or "Failed to scrape content"
                         print(f"❌ SERPER DEBUG: Failed to scrape content from {result.source_url}")
                 else:
                     skip_reason = result.metadata.get('skip_reason', 'Quality threshold not met')
@@ -180,6 +194,8 @@ def clean_and_format_results(results: List[ResearchItem], original_query: str) -
                 scraping_error=result.scraping_error,
                 content_length=result.content_length,
                 scraped_content=cleaned_scraped_content,  # Full content for report generation (NOT truncated)
+                # CRITICAL: Preserve PDF flag for garbage filter exemption
+                is_pdf_content=getattr(result, 'is_pdf_content', False),
                 # Preserve raw content and cleaning metadata
                 raw_content=result.raw_content,
                 raw_content_length=result.raw_content_length,
@@ -362,11 +378,13 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
                 item.pre_filter_content_length = len(item.scraped_content or "")
                 
                 # Apply quality filtering using comprehensive programmatic analysis
+                # CRITICAL: Pass PDF flag to exemp PDF content from garbage filtering
                 should_filter, filter_reason = content_filter.should_filter_content(
                     content=item.scraped_content,
                     url=item.source_url or "",
                     title=item.title or "",
-                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD  # Configurable threshold
+                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD,  # Configurable threshold
+                    is_pdf_content=getattr(item, 'is_pdf_content', False)  # PDF exemption flag
                 )
                 
                 # Get detailed quality analysis for insights

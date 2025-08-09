@@ -77,6 +77,8 @@ class ResearchItem(BaseModel):
     scraping_error: Optional[str] = None  # Error message if scraping failed
     content_length: Optional[int] = None  # Length of scraped content
     scraped_content: Optional[str] = None  # Full scraped content (cleaned if processing succeeded)
+    # PDF extraction tracking - CRITICAL for garbage filter exemption
+    is_pdf_content: Optional[bool] = None  # Whether content was extracted from PDF (exempt from garbage filtering)
     # Raw content preservation (pre-cleaning)
     raw_content: Optional[str] = None  # Exact raw scraped text before any cleaning/normalization
     raw_content_length: Optional[int] = None  # Length of raw scraped text

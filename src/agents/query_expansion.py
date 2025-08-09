@@ -73,45 +73,25 @@ query_expansion_agent = Agent(
 )
 
 
-@query_expansion_agent.tool
-async def generate_subquestions(ctx: RunContext[QueryExpansionDeps], query: str) -> List[str]:
-    """Tool to generate sub-questions for a given query."""
-    # This is a placeholder - in a real implementation, this would contain
-    # the logic to generate sub-questions, but the agent handles this via the system prompt
-    return []
-
 
 async def expand_query_to_subquestions(query: str) -> List[str]:
-    """Expand user query into 3 diverse sub-questions using LLM-based generation.
-    
-    This function uses an LLM with few-shot examples to generate sub-questions
-    that cover different aspects of the original query including technical,
-    practical, comparative, and contextual dimensions.
-    """
+    """Expand user query into 3 diverse sub-questions using Pydantic AI structured output."""
     try:
-        # Use the agent to generate sub-questions
-        result = await query_expansion_agent.run(query)
-        subqs = result.output
-        # Basic cleanup to ensure well-formed, unique, non-empty questions
-        cleaned = []
-        seen = set()
-        for q in subqs or []:
-            if not isinstance(q, str):
-                continue
-            sq = q.strip()
-            if not sq:
-                continue
-            if sq.lower() in seen:
-                continue
-            seen.add(sq.lower())
-            cleaned.append(sq)
-        return cleaned[:3]
+        # Use the existing Pydantic AI agent that's properly configured for structured output
+        deps = QueryExpansionDeps()
+        
+        # Run the agent with the query - it will return List[str] due to output_type
+        result = await query_expansion_agent.run(
+            f"Expand this query into exactly 3 diverse sub-questions: {query}",
+            deps=deps
+        )
+        
+        # The agent returns structured List[str] output
+        if result and result.data and isinstance(result.data, list):
+            return result.data[:3]  # Ensure exactly 3 questions
+        else:
+            raise Exception(f"Agent returned invalid output format: {type(result.data)}")
+            
     except Exception as e:
-        # Fallback to deterministic approach if LLM fails
-        print(f"⚠️  Query expansion failed, using fallback approach: {e}")
-        cy = current_year()
-        return [
-            f"{query} - technical aspects, mechanisms, and implementation approaches {cy}",
-            f"{query} - practical applications, industry adoption, and real-world case studies {cy}",
-            f"{query} - comparative analysis, limitations, and future challenges {cy}"
-        ]
+        # NO FALLBACK - let it fail properly so Pydantic AI retry mechanism can work
+        raise Exception(f"Query expansion failed: {e}")
