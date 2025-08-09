@@ -4,14 +4,12 @@ Expands queries into 3 sub-questions and performs parallel searches.
 """
 
 import asyncio
-import httpx
 from typing import List, Optional
 from tavily import AsyncTavilyClient
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 from datetime import datetime
 import time
-from bs4 import BeautifulSoup
 
 from models import ResearchPipelineModel, ResearchItem, AgentResponse
 from config import config
@@ -55,41 +53,24 @@ async def expand_query_to_subquestions(query: str) -> List[str]:
     return await expand_query_to_subquestions_llm(query)
 
 
+# PERFORMANCE OPTIMIZATION: Enhanced scraping with pre-flight checks moved to utils
+# This eliminates duplicate code and provides intelligent gating to avoid blocked sites
+from utils.intelligent_scraper import scrape_url_content_detailed
+
 async def scrape_url_content(url: str, max_chars: int = 2000) -> str:
-    """Scrape content from URL to get more detailed information."""
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        
-        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            
-            # Parse HTML content
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
-                script.decompose()
-            
-            # Get text content
-            text = soup.get_text()
-            
-            # Clean up text
-            lines = (line.strip() for line in text.splitlines())
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = ' '.join(chunk for chunk in chunks if chunk)
-            
-            # Limit length
-            if len(text) > max_chars:
-                text = text[:max_chars] + "..."
-            
-            return text
-            
-    except Exception as e:
-        print(f"Failed to scrape {url}: {str(e)}")
-        return ""
+    """Enhanced scraping with pre-flight checks and intelligent error handling."""
+    result = await scrape_url_content_detailed(url, max_chars)
+    
+    # Log detailed information for debugging
+    if not result.success:
+        if result.was_blocked:
+            print(f"🚫 BLOCKED: {url} - {result.block_reason} (saved {result.processing_time:.2f}s)")
+        else:
+            print(f"❌ FAILED: {url} - {result.error_reason} (after {result.processing_time:.2f}s)")
+    else:
+        print(f"✅ SUCCESS: {url} - {len(result.content)} chars (in {result.processing_time:.2f}s)")
+    
+    return result.content
 
 
 async def search_tavily(

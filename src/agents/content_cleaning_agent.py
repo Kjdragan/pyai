@@ -188,54 +188,86 @@ async def _process_content_batch(batch: list[tuple[str, str, str]]) -> list[tupl
         content, topic, source_url = batch[0]
         return [await clean_scraped_content(content, topic, source_url)]
     
-    # If any PDFs are present and skipping PDFs is enabled, fall back to individual processing
-    if config.CLEANING_SKIP_PDFS and any(_is_pdf_url(src) for _, _, src in batch):
-        get_logger().info("⏭️ PDF detected in batch; falling back to individual cleaning to avoid truncation")
-        results = []
-        for content, topic, source_url in batch:
-            results.append(await clean_scraped_content(content, topic, source_url))
-        return results
+    # PERFORMANCE FIX: Handle PDFs within batch instead of falling back to sequential
+    # This maintains batch efficiency while properly handling PDF content
+    pdf_items = []
+    non_pdf_items = []
     
-    # Multi-item batch processing
-    batch_prompt = _create_batch_prompt(batch)
+    # Separate PDFs from non-PDFs
+    for i, (content, topic, source_url) in enumerate(batch):
+        if config.CLEANING_SKIP_PDFS and _is_pdf_url(source_url):
+            pdf_items.append((i, content, topic, source_url))
+        else:
+            non_pdf_items.append((i, content, topic, source_url))
     
-    try:
-        result = await content_cleaning_agent.run(batch_prompt)
-        cleaned_contents = _parse_batch_response(result.data, len(batch))
+    # Process both types efficiently
+    results = [None] * len(batch)  # Preserve order
+    
+    # Process non-PDFs in batch if any exist
+    if non_pdf_items:
+        non_pdf_batch = [(content, topic, source_url) for _, content, topic, source_url in non_pdf_items]
+        batch_prompt = _create_batch_prompt(non_pdf_batch)
         
-        # Validate and return results
-        results = []
-        for i, (original_content, topic, source_url) in enumerate(batch):
-            if i < len(cleaned_contents) and cleaned_contents[i].strip():
-                cleaned = cleaned_contents[i].strip()
-                results.append((cleaned, True))
-                
-                # Log metrics
-                reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
-                get_logger().info(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
-                try:
-                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(cleaned), success=True)
-                except Exception:
-                    pass
-            else:
-                # Fallback to original content
-                results.append((original_content, False))
-                get_logger().error(f"❌ Batch cleaning failed for {source_url}, using original")
-                try:
-                    run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(original_content), success=False)
-                except Exception:
-                    pass
+        try:
+            result = await content_cleaning_agent.run(batch_prompt)
+            cleaned_contents = _parse_batch_response(result.data, len(non_pdf_batch))
+            
+            # Apply results back to correct positions
+            for idx, (original_idx, original_content, topic, source_url) in enumerate(non_pdf_items):
+                if idx < len(cleaned_contents) and cleaned_contents[idx].strip():
+                    cleaned = cleaned_contents[idx].strip()
+                    results[original_idx] = (cleaned, True)
+                    
+                    # Log metrics
+                    reduction = ((len(original_content) - len(cleaned)) / len(original_content)) * 100
+                    get_logger().info(f"✅ Batch cleaned {source_url}: {len(original_content)} → {len(cleaned)} chars ({reduction:.1f}% reduction)")
+                    try:
+                        run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(cleaned), success=True)
+                    except Exception:
+                        pass
+                else:
+                    # Fallback to original content
+                    results[original_idx] = (original_content, False)
+                    get_logger().error(f"❌ Batch cleaning failed for {source_url}, using original")
+                    try:
+                        run_summary.observe_cleaning(chars_in=len(original_content), chars_out=len(original_content), success=False)
+                    except Exception:
+                        pass
         
-        return results
+        except Exception as e:
+            get_logger().error(f"❌ Batch processing failed for non-PDFs: {e}")
+            # Fallback for non-PDFs only
+            for original_idx, original_content, topic, source_url in non_pdf_items:
+                individual_result = await clean_scraped_content(original_content, topic, source_url)
+                results[original_idx] = individual_result
+    
+    # Process PDFs individually with PDF-aware cleaning (parallel if multiple PDFs)
+    if pdf_items:
+        get_logger().info(f"📄 Processing {len(pdf_items)} PDF items with PDF-aware cleaning")
         
-    except Exception as e:
-        get_logger().error(f"❌ Batch processing failed: {e}, falling back to individual processing")
-        
-        # Fallback to individual processing
-        individual_results = []
-        for content, topic, source_url in batch:
-            individual_results.append(await clean_scraped_content(content, topic, source_url))
-        return individual_results
+        if len(pdf_items) == 1:
+            # Single PDF - process directly
+            original_idx, content, topic, source_url = pdf_items[0]
+            results[original_idx] = await clean_scraped_content(content, topic, source_url)
+        else:
+            # Multiple PDFs - process in parallel for efficiency
+            pdf_tasks = [
+                clean_scraped_content(content, topic, source_url) 
+                for _, content, topic, source_url in pdf_items
+            ]
+            pdf_results = await asyncio.gather(*pdf_tasks, return_exceptions=True)
+            
+            # Apply PDF results back to correct positions
+            for (original_idx, _, _, _), pdf_result in zip(pdf_items, pdf_results):
+                if isinstance(pdf_result, tuple):
+                    results[original_idx] = pdf_result
+                else:
+                    # Exception occurred - use original content
+                    get_logger().error(f"❌ PDF cleaning failed: {pdf_result}")
+                    original_content = batch[original_idx][0]  # Get original content
+                    results[original_idx] = (original_content, False)
+    
+    return results
 
 
 def _create_batch_prompt(batch: list[tuple[str, str, str]]) -> str:

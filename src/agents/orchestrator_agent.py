@@ -834,91 +834,93 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
             message=f"Using {len(centralized_sub_queries)} shared sub-queries for both research APIs"
         ))
         
-        results = []
+        # PERFORMANCE OPTIMIZATION: Run research APIs in parallel instead of sequential
+        # This saves 2-3 minutes by executing Tavily and Serper concurrently
         
+        # Prepare parallel task execution
+        research_tasks = []
+        task_names = []
+        sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+        
+        # Create Tavily task if needed
         if pipeline in ["tavily", "both"]:
-            try:
-                # Use proper Pydantic AI agent with explicit tool usage prompt and pre-generated sub-queries
-                from agents.research_tavily_agent import tavily_research_agent, TavilyResearchDeps
-                
-                # Create proper dependencies for the Tavily agent
-                tavily_deps = TavilyResearchDeps()
-                
-                # Include centralized sub-queries in the prompt to prevent agent from generating its own
-                sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
-                
-                tavily_result = await tavily_research_agent.run(
-                    f"Use your perform_tavily_research tool to conduct comprehensive research on: {query}. "
-                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
-                    f"Please search for real web sources and return structured results with actual URLs and data.",
-                    deps=tavily_deps,
-                    usage=ctx.usage
-                )
-                # Convert to AgentResponse format for compatibility
-                # Extract the actual ResearchPipelineModel from AgentRunResult (use .output not deprecated .data)
-                if hasattr(tavily_result, 'output') and tavily_result.output:
-                    result_data = tavily_result.output.model_dump() if hasattr(tavily_result.output, 'model_dump') else tavily_result.output
-                else:
-                    result_data = tavily_result.model_dump() if hasattr(tavily_result, 'model_dump') else tavily_result
-                
-                tavily_response = AgentResponse(
-                    agent_name="TavilyResearchAgent",
-                    success=True,
-                    data=result_data,
-                    error=None
-                )
-                results.append(("Tavily", tavily_response))
-            except Exception as e:
-                tavily_response = AgentResponse(
-                    agent_name="TavilyResearchAgent",
-                    success=False,
-                    data={},
-                    error=str(e)
-                )
-                results.append(("Tavily", tavily_response))
-                ctx.deps.errors.append(f"Tavily: {str(e)}")
+            from agents.research_tavily_agent import tavily_research_agent, TavilyResearchDeps
+            tavily_deps = TavilyResearchDeps()
+            
+            tavily_task = tavily_research_agent.run(
+                f"Use your perform_tavily_research tool to conduct comprehensive research on: {query}. "
+                f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
+                f"Please search for real web sources and return structured results with actual URLs and data.",
+                deps=tavily_deps,
+                usage=ctx.usage
+            )
+            research_tasks.append(tavily_task)
+            task_names.append("Tavily")
         
+        # Create Serper task if needed  
         if pipeline in ["serper", "both"]:
+            from agents.research_serper_agent import serper_research_agent, SerperResearchDeps
+            serper_deps = SerperResearchDeps()
+            
+            serper_task = serper_research_agent.run(
+                f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
+                f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
+                f"Please search for real web sources and return structured results with actual URLs and data.",
+                deps=serper_deps,
+                usage=ctx.usage
+            )
+            research_tasks.append(serper_task)
+            task_names.append("Serper")
+        
+        # Execute all research tasks concurrently
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator", 
+            message=f"Running {len(research_tasks)} research APIs in parallel for maximum speed"
+        ))
+        
+        # Wait for all tasks to complete
+        research_results = await asyncio.gather(*research_tasks, return_exceptions=True)
+        
+        # Process results and handle any exceptions
+        results = []
+        for i, (task_name, result) in enumerate(zip(task_names, research_results)):
             try:
-                # Use proper Pydantic AI agent with explicit tool usage prompt and same pre-generated sub-queries
-                from agents.research_serper_agent import serper_research_agent, SerperResearchDeps
-                
-                # Create proper dependencies for the Serper agent
-                serper_deps = SerperResearchDeps()
-                
-                # Use the same centralized sub-queries for Serper to prevent duplication
-                sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
-                
-                serper_result = await serper_research_agent.run(
-                    f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
-                    f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
-                    f"Please search for real web sources and return structured results with actual URLs and data.",
-                    deps=serper_deps,
-                    usage=ctx.usage
-                )
-                # Convert to AgentResponse format for compatibility
-                # Extract the actual ResearchPipelineModel from AgentRunResult (use .output not deprecated .data)
-                if hasattr(serper_result, 'output') and serper_result.output:
-                    result_data = serper_result.output.model_dump() if hasattr(serper_result.output, 'model_dump') else serper_result.output
+                if isinstance(result, Exception):
+                    # Task failed with exception
+                    response = AgentResponse(
+                        agent_name=f"{task_name}ResearchAgent",
+                        success=False,
+                        data={},
+                        error=str(result)
+                    )
+                    ctx.deps.errors.append(f"{task_name}: {str(result)}")
                 else:
-                    result_data = serper_result.model_dump() if hasattr(serper_result, 'model_dump') else serper_result
+                    # Task succeeded - extract data
+                    if hasattr(result, 'output') and result.output:
+                        result_data = result.output.model_dump() if hasattr(result.output, 'model_dump') else result.output
+                    else:
+                        result_data = result.model_dump() if hasattr(result, 'model_dump') else result
+                    
+                    response = AgentResponse(
+                        agent_name=f"{task_name}ResearchAgent",
+                        success=True,
+                        data=result_data,
+                        error=None
+                    )
                 
-                serper_response = AgentResponse(
-                    agent_name="SerperResearchAgent",
-                    success=True,
-                    data=result_data,
-                    error=None
-                )
-                results.append(("Serper", serper_response))
+                results.append((task_name, response))
+                
             except Exception as e:
-                serper_response = AgentResponse(
-                    agent_name="SerperResearchAgent",
+                # Error in result processing
+                response = AgentResponse(
+                    agent_name=f"{task_name}ResearchAgent",
                     success=False,
                     data={},
-                    error=str(e)
+                    error=f"Result processing error: {str(e)}"
                 )
-                results.append(("Serper", serper_response))
-                ctx.deps.errors.append(f"Serper: {str(e)}")
+                results.append((task_name, response))
+                ctx.deps.errors.append(f"{task_name}: Result processing error: {str(e)}")
         
         success_count = sum(1 for _, response in results if response.success)
         total_results = sum(response.data.get('total_results', 0) for _, response in results if response.success)

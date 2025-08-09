@@ -21,7 +21,7 @@ Hub-and-spoke multi-agent system using Pydantic-AI.
 - Specialized agents:
   - `YouTubeAgent` – transcript extraction
   - `WeatherAgent` – OpenWeather
-  - `TavilyResearchAgent` and `DuckDuckGoResearchAgent` – research pipelines
+  - `TavilyResearchAgent` and `SerperResearchAgent` – research pipelines
   - `ReportWriterAgent` – report generation
 
 Interfaces:
@@ -35,7 +35,7 @@ Key files:
 - `tests/` – async tests and unit checks
 
 APIs used:
-- OpenAI (primary), Anthropic (optional), Tavily, OpenWeather, YouTube Transcript
+- OpenAI (primary), Anthropic (optional), Tavily, Serper (Google), OpenWeather, YouTube Transcript
 
 ## Configuration Cheatsheet (src/config.py)
 Model selection defaults:
@@ -53,6 +53,13 @@ State logging & truncation (Dual-output):
 - `WRITE_TRUNCATED_STATE_COPY` (default true)
 - `LLM_STATE_MAX_FIELD_CHARS` (default 1000)
 - `LLM_STATE_TRUNCATE_FIELDS` (default: `raw_content,scraped_content,pre_filter_content,post_filter_content`)
+
+Research parallelism & thresholds:
+- `RESEARCH_PARALLELISM_ENABLED` (default false), `RESEARCH_MAX_CONCURRENCY` (default 8)
+- `SERPER_MAX_CONCURRENCY` (default 5)
+- Tavily: `TAVILY_TIME_RANGE`, `TAVILY_SEARCH_DEPTH`, `TAVILY_MIN_SCORE`, `TAVILY_SCRAPING_THRESHOLD`, `TAVILY_RATE_LIMIT_RPS`
+- Quality filter: `GARBAGE_FILTER_THRESHOLD` (default 0.2)
+- PDF cleaning: `CLEANING_SKIP_PDFS` (default false — PDFs are processed)
 
 Note: `dotenv` import is optional; config gracefully degrades if python-dotenv isn’t installed.
 
@@ -97,6 +104,13 @@ Key distinction:
 - Dual-output logging implemented (full + truncated `.llm.json`) with configurable field limits; data integrity maintained by never mutating pipeline artifacts.
 - Fixed issues: use `ResearchItem` (not `ResearchResult`); Pydantic `HttpUrl` JSON serialization in logger; async bug in `get_enhanced_domain_context` fixed; tests added for classifier (with optional live-API if key present).
 
+Latest changes (Aug 08, 2025):
+- Parallel research dispatch in `src/agents/orchestrator_agent.py` using `asyncio.gather()` for Tavily + Serper.
+- New Pydantic-AI agents: `src/agents/research_tavily_agent.py` and `src/agents/research_serper_agent.py` returning `ResearchPipelineModel`.
+- `src/agents/content_cleaning_agent.py`: batched cleaning and PDF-aware handling within batches.
+- `src/config.py`: centralized config with research parallelism, Tavily/Serper knobs, and cleaning flags.
+- Note: `utils/intelligent_scraper.py` and `utils/pdf_extractor.py` are referenced by agents but not yet present—implement next to avoid ImportError.
+
 ## Testing Guidance
 - Activate venv: `source .venv/bin/activate`
 - Use `python3`, not `python`.
@@ -105,10 +119,14 @@ Key distinction:
 - When needed, run live API tests only if keys exist; avoid long runs (hang risk).
 
 ## Open TODOs / Next Steps
-- Documentation: update usage instructions and README snippets for dual logging and config flags.
-- Generate and save a comprehensive evaluation report in `evaluation_reports/` comparing prior and current runs, focusing on efficiency, API coverage, redundancy, and quote retention.
-- Expand prompts/templates if further improvements in quote retention or domain classification are required.
-- Consider a utility to expand truncated fields on demand for `.llm.json` consumers.
+- Implement missing utilities referenced by agents:
+  - `src/utils/intelligent_scraper.py` (pre-flight gating, allow/deny lists, canonicalization)
+  - `src/utils/pdf_extractor.py` (fast local PDF text extraction, caching)
+- Add citations section to reports (reference metadata of sources used; not scholarly strictness required).
+- Create `logs/reports/` output directory and persist final report artifacts there.
+- Integrate/verify tracing (e.g., Arise) alongside existing instrumentation.
+- Validate parallel research path with bounded concurrency and idempotency guards.
+- Run a short E2E test with known PDF-heavy sources (e.g., NREL) to confirm extraction + cleaning.
 
 ## Operational Notes (Environment & Pitfalls)
 - Long-running commands can hang; keep tests short and isolated.
@@ -119,7 +137,7 @@ Key distinction:
 - `CLAUDE.md` — high-level guidance, conventions, and prompts for assistants.
 - `src/Project Documentation/lessonslearned.md` — critical debugging and architectural insights (env override ordering, async patterns, Logfire, streaming, Pydantic-AI pitfalls).
 - `tests/` — look for async tests and domain classifier checks.
-- `src/agents/research_tavily_agent.py` + `src/config.py` — Tavily best practices and rate limiting.
+- `src/agents/research_tavily_agent.py`, `src/agents/research_serper_agent.py`, `src/agents/content_cleaning_agent.py`, and `src/config.py` — research agents, cleaning pipeline, and configuration knobs.
 
 ---
 

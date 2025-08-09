@@ -93,8 +93,8 @@ class Config:
     # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
     GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.2"))
 
-    # Content cleaning behavior
-    CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "true").lower() == "true"
+    # Content cleaning behavior - PDF processing now enabled with local text extraction
+    CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "false").lower() == "true"  # Enable PDF processing by default
 
     @classmethod
     def validate_required_keys(cls) -> list[str]:
