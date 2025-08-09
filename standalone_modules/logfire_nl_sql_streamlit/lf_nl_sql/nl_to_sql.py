@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Optional
+import logging
 
 from .schema_context import SCHEMA_SUMMARY, FEW_SHOT_EXAMPLES
 
@@ -42,25 +43,32 @@ def generate_sql(
     mode: str = "new",
     existing_sql: Optional[str] = None,
 ) -> str:
+    log = logging.getLogger(__name__)
     prompt = _build_prompt(user_prompt, mode=mode, existing_sql=existing_sql)
 
     if provider == "openai" and OPENAI_AVAILABLE:
         client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Return only SQL in a single code block."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-        )
+        log.info("OpenAI generate_sql | model=%s mode=%s prompt_len=%s", model, mode, len(user_prompt or ""))
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Return only SQL in a single code block."},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+        except Exception:
+            log.exception("OpenAI chat.completions.create failed")
+            raise
         text = resp.choices[0].message.content or ""
         # strip code fences if present
         if text.strip().startswith("```"):
             text = text.strip().strip("`")
             if "\n" in text:
                 text = "\n".join(text.splitlines()[1:])
-        return text.strip()
+        sql_out = text.strip()
+        log.debug("OpenAI generated SQL (truncated): %s", sql_out.replace("\n", " ")[:300])
+        return sql_out
 
     # Fallback: produce a safe baseline for manual editing
     return (

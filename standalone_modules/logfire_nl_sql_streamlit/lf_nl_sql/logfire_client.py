@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
+import logging
 
 
 ACCEPT_MAP = {
@@ -19,10 +20,16 @@ ACCEPT_MAP = {
 
 class LogfireQueryClient:
     def __init__(self, base_url: str, read_token: str, default_accept: str = "csv") -> None:
+        self._log = logging.getLogger(__name__)
         self.base_url = base_url.rstrip("/")
         self.read_token = read_token
         self.default_accept = default_accept
         self._client = httpx.Client(timeout=60.0)
+        self._log.debug(
+            "Initialized LogfireQueryClient base_url=%s default_accept=%s",
+            self.base_url,
+            self.default_accept,
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -37,9 +44,21 @@ class LogfireQueryClient:
     @retry(wait=wait_exponential(multiplier=0.5, min=1, max=10), stop=stop_after_attempt(3))
     def _request(self, params: Dict[str, str], accept: Optional[str]) -> httpx.Response:
         url = f"{self.base_url}/v1/query"
-        resp = self._client.get(url, params=params, headers=self._headers(accept))
-        resp.raise_for_status()
-        return resp
+        self._log.info("HTTP GET %s params=%s accept=%s", url, json.dumps(params, ensure_ascii=False), accept or self.default_accept)
+        try:
+            resp = self._client.get(url, params=params, headers=self._headers(accept))
+            self._log.info(
+                "HTTP %s %s elapsed=%sms", resp.status_code, url, getattr(resp, "elapsed", None).total_seconds() * 1000 if getattr(resp, "elapsed", None) else "?"
+            )
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as e:
+            body = getattr(e.response, "text", "")
+            self._log.error("HTTPStatusError %s body=%s", e, body[:2000])
+            raise
+        except httpx.RequestError as e:
+            self._log.exception("RequestError: %s", e)
+            raise
 
     def query(
         self,
@@ -62,6 +81,7 @@ class LogfireQueryClient:
         if limit:
             params["limit"] = str(limit)
 
+        self._log.debug("Query start accept=%s limit=%s min_ts=%s max_ts=%s", accept or self.default_accept, limit, min_ts, max_ts)
         resp = self._request(params, accept)
         fmt = (accept or self.default_accept).lower()
         meta = {"accept": fmt, "status_code": resp.status_code}
@@ -70,7 +90,7 @@ class LogfireQueryClient:
             df = pd.read_csv(io.StringIO(resp.text))
         elif fmt == "json":
             payload = resp.json()
-            # Accept either list-of-dicts or {"data": [...]}
+            # Accept either list-of-dicts or {"data": [...]} 
             if isinstance(payload, dict) and "data" in payload:
                 rows = payload["data"]
             else:
@@ -88,4 +108,5 @@ class LogfireQueryClient:
         else:
             raise ValueError(f"Unsupported accept format: {fmt}")
 
+        self._log.info("Query success rows=%s format=%s status=%s", len(df.index), fmt, meta["status_code"])  # type: ignore[arg-type]
         return df, meta

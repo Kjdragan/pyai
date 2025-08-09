@@ -212,7 +212,14 @@ async def clean_multiple_contents_batched(
             task = _process_chunked_content(content, topic, source_url)
             all_tasks.append(('large_item', idx, task))
     
-    get_logger().info(f"🚀 Launching {len(all_tasks)} parallel processing tasks ({len([t for t in all_tasks if t[0] == 'small_batch'])} batches + {len([t for t in all_tasks if t[0] == 'large_item'])} chunked items)")
+    if config.MAX_PARALLEL_CLEANING:
+        individual_count = len([t for t in all_tasks if t[0] == 'individual_small'])
+        chunked_count = len([t for t in all_tasks if t[0] == 'large_item'])
+        get_logger().info(f"🚀 MAXIMUM PARALLELIZATION: Launching {len(all_tasks)} individual LLM calls ({individual_count} individual + {chunked_count} chunked)")
+    else:
+        batch_count = len([t for t in all_tasks if t[0] == 'small_batch'])
+        chunked_count = len([t for t in all_tasks if t[0] == 'large_item'])
+        get_logger().info(f"🚀 Launching {len(all_tasks)} parallel processing tasks ({batch_count} batches + {chunked_count} chunked items)")
     
     # Execute ALL tasks in parallel - no sequential waiting!
     task_results = await asyncio.gather(*[task for _, _, task in all_tasks], return_exceptions=True)
@@ -266,7 +273,12 @@ async def clean_multiple_contents_batched(
     success_count = sum(1 for result in final_results if result and result[1])
     
     get_logger().info(f"✅ PARALLEL cleaning completed: {success_count}/{len(content_items)} successful in {total_time:.2f}s")
-    get_logger().info(f"📊 Processed: {len(small_items)} regular items in batches + {len(large_items)} large items with chunking")
+    
+    if config.MAX_PARALLEL_CLEANING:
+        get_logger().info(f"📊 MAXIMUM PARALLELIZATION: {len(small_items)} individual LLM calls + {len(large_items)} large items with chunking")
+        get_logger().info(f"🚀 LLM THROUGHPUT: {len(content_items)} simultaneous API calls (no batching limits)")
+    else:
+        get_logger().info(f"📊 BATCH PROCESSING: {len(small_items)} regular items in batches + {len(large_items)} large items with chunking")
     
     return final_results
 

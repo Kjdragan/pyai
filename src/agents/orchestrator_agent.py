@@ -840,7 +840,16 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         # Prepare parallel task execution
         research_tasks = []
         task_names = []
-        sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+        
+        # FOUR-QUERY STRATEGY: Include original query as fourth query if enabled
+        all_queries = centralized_sub_queries.copy()  # Start with 3 sub-queries
+        if config.INCLUDE_ORIGINAL_QUERY:
+            # Add original query as the fourth query for improved source diversity
+            all_queries.append(query)
+            print(f"🎯 FOUR-QUERY STRATEGY: Added original query as 4th query for source diversity")
+            print(f"📝 All queries: {all_queries}")
+        
+        sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(all_queries)])
         
         # Create Tavily task if needed
         if pipeline in ["tavily", "both"]:

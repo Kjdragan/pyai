@@ -314,6 +314,20 @@ def create_intelligent_system_prompt(style: str, domain_context: dict, data_type
     - Include specific data points, metrics, and quantifiable insights
     - Ensure logical flow and coherent argumentation throughout
     - Provide publication-ready quality (no draft language)
+    
+    MARKDOWN FORMATTING REQUIREMENTS:
+    - Use proper Markdown syntax for excellent readability and visual appeal
+    - Apply consistent heading hierarchy (# ## ###) for clear structure
+    - Use **bold** for key terms, metrics, and important findings
+    - Use *italic* for emphasis and secondary information
+    - Use `code formatting` for technical terms, URLs, and specific values
+    - Create tables using | pipes | for structured data and comparisons
+    - Use > blockquotes for important quotes and key findings
+    - Apply - bullet points and numbered lists for clarity
+    - Use --- horizontal dividers to separate major sections
+    - Include emojis strategically for visual hierarchy (📊 📈 ⚡ ✅ ⚠️)
+    - Ensure proper line breaks and whitespace for readability
+    - Format code blocks with ``` when showing examples or data
     """
 
     return base_prompt

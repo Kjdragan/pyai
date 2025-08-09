@@ -11,6 +11,7 @@ from urllib.parse import urlparse, urljoin, parse_qs
 from dataclasses import dataclass
 from bs4 import BeautifulSoup
 import re
+from collections import defaultdict, deque
 
 
 @dataclass
@@ -83,10 +84,17 @@ class IntelligentScraper:
     ]
     
     def __init__(self, timeout: float = 15.0):
-        """Initialize scraper with optimized settings."""
+        """Initialize scraper with optimized settings and rate limiting."""
         self.timeout = timeout
         self.session_urls: Set[str] = set()  # In-session URL deduplication
         self._user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        
+        # ENHANCED RATE LIMITING: Cache failed domains/URLs to avoid retrying
+        self.failed_domains: Set[str] = set()  # Domains that consistently fail
+        self.failed_urls: Set[str] = set()     # Specific URLs that failed
+        self.domain_request_times: Dict[str, deque] = defaultdict(deque)  # Track request times per domain
+        self.min_request_interval = 1.0  # Minimum seconds between requests to same domain
+        self.max_requests_per_minute = 10  # Maximum requests per domain per minute
     
     def normalize_url(self, url: str) -> str:
         """Normalize URL for deduplication (remove tracking params, etc.)."""
@@ -116,12 +124,75 @@ class IntelligentScraper:
         """Check if domain should be skipped entirely."""
         try:
             domain = urlparse(url).netloc.lower()
+            
+            # Check static blacklist
             for blocked_domain in self.BLOCKED_DOMAINS:
                 if blocked_domain in domain:
                     return True, f"Domain blocked: {blocked_domain}"
+            
+            # ENHANCED RATE LIMITING: Check dynamic failure cache
+            if domain in self.failed_domains:
+                return True, f"Domain previously failed: {domain}"
+            
+            if url in self.failed_urls:
+                return True, f"URL previously failed: {url}"
+            
             return False, None
         except:
             return True, "Invalid URL format"
+    
+    async def apply_rate_limiting(self, url: str) -> None:
+        """Apply rate limiting delays to prevent overwhelming domains."""
+        try:
+            domain = urlparse(url).netloc.lower()
+            current_time = time.time()
+            
+            # Clean old request times (keep only last minute)
+            domain_times = self.domain_request_times[domain]
+            while domain_times and current_time - domain_times[0] > 60:
+                domain_times.popleft()
+            
+            # Check if we've exceeded requests per minute limit
+            if len(domain_times) >= self.max_requests_per_minute:
+                oldest_request = domain_times[0]
+                wait_time = 60 - (current_time - oldest_request)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                    current_time = time.time()
+            
+            # Ensure minimum interval between requests to same domain
+            if domain_times:
+                time_since_last = current_time - domain_times[-1]
+                if time_since_last < self.min_request_interval:
+                    await asyncio.sleep(self.min_request_interval - time_since_last)
+                    current_time = time.time()
+            
+            # Record this request time
+            self.domain_request_times[domain].append(current_time)
+            
+        except Exception:
+            # If rate limiting fails, don't block the request
+            pass
+    
+    def record_failure(self, url: str, failure_type: str) -> None:
+        """Record failures for future quick failure."""
+        try:
+            domain = urlparse(url).netloc.lower()
+            
+            # Record specific URL failure
+            self.failed_urls.add(url)
+            
+            # Record domain failure for certain types of persistent issues
+            persistent_failure_types = [
+                "HTTP 403", "HTTP 401", "HTTP 404", 
+                "Paywall", "Domain blocked", "Redirect to blocked pattern"
+            ]
+            
+            if any(failure in failure_type for failure in persistent_failure_types):
+                self.failed_domains.add(domain)
+                
+        except Exception:
+            pass
     
     async def pre_flight_check(self, url: str) -> Tuple[bool, Optional[str]]:
         """
@@ -218,7 +289,7 @@ class IntelligentScraper:
 
     async def scrape_url_content(self, url: str, max_chars: int = 10000) -> ScrapingResult:
         """
-        Enhanced scraping with pre-flight checks, intelligent error handling, and PDF support.
+        Enhanced scraping with pre-flight checks, intelligent error handling, rate limiting, and PDF support.
         """
         start_time = time.time()
         
@@ -238,10 +309,10 @@ class IntelligentScraper:
                 )
             self.session_urls.add(normalized_url)
             
-            # Step 3: Domain blacklist check  
+            # Step 3: Domain blacklist check (includes enhanced failure cache)
             should_skip, skip_reason = self.should_skip_domain(url)
             if should_skip:
-                return ScrapingResult(
+                result = ScrapingResult(
                     success=False,
                     content="",
                     error_reason=skip_reason,
@@ -249,11 +320,16 @@ class IntelligentScraper:
                     block_reason=skip_reason,
                     processing_time=time.time() - start_time
                 )
+                # Don't record this as a new failure since it's already cached
+                return result
+            
+            # Step 3.5: ENHANCED RATE LIMITING - Apply delays to prevent overwhelming domains
+            await self.apply_rate_limiting(url)
             
             # Step 4: Pre-flight HEAD check
             should_proceed, preflight_reason = await self.pre_flight_check(url)
             if not should_proceed:
-                return ScrapingResult(
+                result = ScrapingResult(
                     success=False, 
                     content="",
                     error_reason=f"Pre-flight failed: {preflight_reason}",
@@ -261,6 +337,9 @@ class IntelligentScraper:
                     block_reason=preflight_reason,
                     processing_time=time.time() - start_time
                 )
+                # Record failure for future quick failure
+                self.record_failure(url, preflight_reason or "Pre-flight failed")
+                return result
             
             # Step 5: Full content scraping (HTML/text)
             headers = {'User-Agent': self._user_agent}
@@ -287,7 +366,7 @@ class IntelligentScraper:
                 # Step 6: Paywall detection
                 is_paywall, paywall_reason = self.detect_paywall_content(cleaned_text)
                 if is_paywall:
-                    return ScrapingResult(
+                    result = ScrapingResult(
                         success=False,
                         content="",
                         error_reason=f"Paywall detected: {paywall_reason}",
@@ -296,6 +375,9 @@ class IntelligentScraper:
                         block_reason=paywall_reason,
                         processing_time=time.time() - start_time
                     )
+                    # Record paywall failure for future quick failure
+                    self.record_failure(url, f"Paywall: {paywall_reason}")
+                    return result
                 
                 # Step 7: Limit content length
                 if len(cleaned_text) > max_chars:
@@ -310,37 +392,58 @@ class IntelligentScraper:
                 )
         
         except httpx.TimeoutException:
-            return ScrapingResult(
+            result = ScrapingResult(
                 success=False,
                 content="",
                 error_reason="Request timeout",
                 processing_time=time.time() - start_time
             )
+            # Record timeout failure for future quick failure
+            self.record_failure(url, "Request timeout")
+            return result
         except httpx.HTTPStatusError as e:
-            return ScrapingResult(
+            result = ScrapingResult(
                 success=False,
                 content="",
                 error_reason=f"HTTP {e.response.status_code}",
                 status_code=e.response.status_code,
                 processing_time=time.time() - start_time
             )
+            # Record HTTP error for future quick failure
+            self.record_failure(url, f"HTTP {e.response.status_code}")
+            return result
         except Exception as e:
-            return ScrapingResult(
+            result = ScrapingResult(
                 success=False,
                 content="",
                 error_reason=f"Scraping error: {str(e)}",
                 processing_time=time.time() - start_time
             )
+            # Record general error (but don't cache domain since it might be transient)
+            self.failed_urls.add(url)
+            return result
     
     def get_session_stats(self) -> Dict[str, int]:
         """Get statistics about the current scraping session."""
         return {
             "urls_processed": len(self.session_urls),
+            "failed_domains_cached": len(self.failed_domains),
+            "failed_urls_cached": len(self.failed_urls),
+            "domains_with_rate_limiting": len(self.domain_request_times),
         }
     
     def reset_session(self):
         """Reset session state (useful for new research queries)."""
         self.session_urls.clear()
+        # Note: We intentionally keep failed domains/URLs cached across sessions
+        # to maintain quick failure benefits across multiple research queries
+        # Only clear domain request times for fresh rate limiting
+        self.domain_request_times.clear()
+    
+    def clear_failure_cache(self):
+        """Clear cached failures (useful for testing or manual reset)."""
+        self.failed_domains.clear()
+        self.failed_urls.clear()
 
 
 # Global scraper instance for shared use across agents
