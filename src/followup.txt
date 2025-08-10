@@ -1,0 +1,38 @@
+Here are some of my comments on the run evaluation.
+
+Regarding this below, what was this a SERP or a Tavoli article and what was the relevance assessment? Just because it had the word major update in it, this was deemed relevant. If we need to discuss this, I would have found that that's unlikely to be the result from a tably search. If this is a result of a SERP search, we need to figure out how we can better evaluate relevancy. Do not change anything, we need to discuss a potential approach here. I don't like your recommended fixes right now in your evaluation report because all our queries are going to be so varied we don't have an opportunity to pre-populate every topic for domain relevance and filtering, etc.
+2. Search Query Pollution - MODERATE
+Issue: Irrelevant Manjaro Linux forum results mixing with wind energy content
+
+Evidence:
+
+❌ https://forum.manjaro.org/t/this-major-update-installed-kernel-6-1-1-1/130137
+❌ https://forum.manjaro.org/t/package-lib32-db-is-out-of-date-blocks-major-update-db-dependency/129632  
+❌ https://forum.manjaro.org/t/many-crash-dumped-core-after-last-major-update-yesterday-gnome-how-to-investigate/111928
+Root Cause: Generic terms like "major update" in wind energy queries pulling in unrelated content
+
+
+Regarding the cross API deduplication, that's great if this is true. Can you look at our data just to see if you saw any duplication in research articles?
+
+So now that we have 50 results versus our previous 10 limit, is that 50 from Tavoli or 50 all in? And what was the split between Tavoli and Serper?
+What was the total number of reports or research articles that we know we utilized or was fed into our research synthesis? We may have to be stricter on our evaluation to control that. The approach should be to get lots of research and then filter it down. The goal is not to have less research to choose from, but just to make sure that we are using only the best sources. Depending on your answer, we will need to discuss this approach. That is why I'm interested in how we are dealing with the SERP relevancy, because the tablily relevancy, we can simply take the 50 and pick the first 15, for example. This is not my recommendation, we're just discussing here.
+
+Discuss the context limits, token context limits that we're coming up against. I need to understand it better. We need to try to figure out a way to make our token output and input unlimited, but not waste it on garbage.
+So discuss your recommendation on this: 🚨 Priority 1: Fix Context Length Issue
+Need to implement intelligent content summarization in the orchestrator before final report generation.
+
+yes to all this:
+✨ REPORT WRITER MARKDOWN ENHANCEMENT NEEDED
+The user specifically requested "nicely formatted Markdown" reports. Current report is functional but could be enhanced with:
+
+Recommended Enhancements:
+
+Better visual hierarchy with emojis and formatting
+Structured tables for metrics and data
+Code blocks for technical information
+Clear section dividers and visual breaks
+Enhanced typography with bold, italic, and code formatting
+Implementation: Update report writer system prompts to include explicit Markdown formatting guidelines.
+
+So the one thing that you missed in your report is that we really need to collaborate on figuring out how to pick from the research that we have for the best report synthesis. I need to know from the pipeline what we ended up feeding to the research synthesis from our context, the number of articles and their sources and their sizes. You will have to evaluate, I guess, our state content from our logs to figure that out.
+

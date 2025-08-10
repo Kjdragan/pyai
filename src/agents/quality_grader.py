@@ -132,7 +132,7 @@ class QualityGrader:
         # For Serper, use our calculated quality scores
         if pipeline_type == "serper":
             # Be more selective with Serper since it doesn't have native quality scores
-            return relevance_score >= 0.7
+            return relevance_score >= 0.5
         
         # Conservative fallback
         return relevance_score >= 0.8
@@ -142,7 +142,7 @@ class QualityGrader:
         results: List[ResearchItem], 
         query: str,
         pipeline_type: str,
-        max_scrape_count: int = 8
+        max_scrape_count: int = 50  # Removed artificial limit - parallel scraping handles volume efficiently
     ) -> List[ResearchItem]:
         """
         Grade a batch of results and determine scraping strategy.
@@ -187,10 +187,14 @@ class QualityGrader:
                 item.metadata['should_scrape'] = True
                 item.metadata['scrape_priority'] = scrape_count
             else:
-                # Mark as snippet-only
+                # Mark as snippet-only - determine reason
                 item.metadata = getattr(item, 'metadata', {})
                 item.metadata['should_scrape'] = False
-                item.metadata['skip_reason'] = f"Quality score {item.relevance_score:.2f} below threshold"
+                
+                if scrape_count >= max_scrape_count:
+                    item.metadata['skip_reason'] = f"Scraping limit reached ({scrape_count}/{max_scrape_count}) - Quality score {item.relevance_score:.2f}"
+                else:
+                    item.metadata['skip_reason'] = f"Quality score {item.relevance_score:.2f} below threshold"
             
             graded_results.append(item)
         

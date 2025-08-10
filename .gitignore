@@ -197,3 +197,6 @@ api_keys.txt
 # Logs directory
 src/logs/
 *.log
+
+
+/home/kjdrag/lrepos/pyai/.env

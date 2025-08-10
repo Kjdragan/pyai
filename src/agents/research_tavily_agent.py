@@ -194,15 +194,104 @@ async def search_tavily(
         # Sort by relevance score (best practice)
         results.sort(key=lambda x: x.relevance_score or 0, reverse=True)
         
-        # Log comprehensive filtering and quality summary  
+        # ADAPTIVE FALLBACK SCRAPING: Ensure we have at least 20 total successful sources (including PDFs)
         scraped_count = sum(1 for r in results if r.content_scraped) if results else 0
+        min_sources_target = config.MIN_SCRAPED_SOURCES_TARGET
+        
+        print(f"🔍 TAVILY ADAPTIVE CHECK: {scraped_count} successful sources (including PDFs), target: {min_sources_target}")
+        
+        if scraped_count < min_sources_target:
+            print(f"⚠️ TAVILY FALLBACK TRIGGERED: Only {scraped_count}/{min_sources_target} sources scraped successfully")
+            
+            # Get fallback candidates (previously skipped due to low score)
+            fallback_candidates = []
+            for result in results:
+                # Skip if already successfully scraped
+                if result.content_scraped:
+                    continue
+                
+                # Skip if no URL or previous scraping error
+                if not result.source_url or result.scraping_error:
+                    continue
+                    
+                # Include items that were skipped due to threshold (below TAVILY_SCRAPING_THRESHOLD)
+                fallback_candidates.append(result)
+            
+            # Sort fallback candidates by relevance score (best first)
+            fallback_candidates.sort(key=lambda x: x.relevance_score or 0, reverse=True)
+            
+            needed_sources = min_sources_target - scraped_count
+            candidates_to_try = fallback_candidates[:needed_sources * 2]  # Try 2x needed in case of failures
+            
+            print(f"🔄 TAVILY FALLBACK: Trying {len(candidates_to_try)} additional sources from fallback queue")
+            
+            # Attempt fallback scraping in parallel for efficiency
+            fallback_tasks = []
+            for candidate in candidates_to_try:
+                print(f"🎯 TAVILY FALLBACK: Attempting {candidate.source_url} (score: {candidate.relevance_score:.2f})")
+                task = scrape_url_content_detailed(candidate.source_url, max_chars=10000)
+                fallback_tasks.append((candidate, task))
+            
+            # Execute fallback scraping in parallel
+            if fallback_tasks:
+                fallback_results = await asyncio.gather(*[task for _, task in fallback_tasks], return_exceptions=True)
+                
+                fallback_success_count = 0
+                for (candidate, _), scraping_result in zip(fallback_tasks, fallback_results):
+                    if isinstance(scraping_result, Exception):
+                        print(f"❌ TAVILY FALLBACK FAILED: {candidate.source_url} - Exception: {scraping_result}")
+                        continue
+                        
+                    if scraping_result.success:
+                        # Update the candidate with scraped content
+                        candidate.scraped_content = scraping_result.content
+                        candidate.content_scraped = True
+                        candidate.content_length = len(scraping_result.content)
+                        candidate.scraping_error = None
+                        
+                        # PDF detection for garbage filter exemption
+                        candidate.is_pdf_content = scraping_result.content_length > 50000
+                        from urllib.parse import urlparse
+                        try:
+                            path = urlparse(candidate.source_url).path.lower()
+                            if path.endswith('.pdf') or '.pdf' in path:
+                                candidate.is_pdf_content = True
+                        except:
+                            pass
+                            
+                        # Preserve raw content
+                        candidate.raw_content = scraping_result.content
+                        candidate.raw_content_length = len(scraping_result.content)
+                        
+                        fallback_success_count += 1
+                        print(f"✅ TAVILY FALLBACK SUCCESS: {candidate.source_url} - {candidate.content_length} chars")
+                        
+                        # Stop if we've reached our target
+                        if scraped_count + fallback_success_count >= min_sources_target:
+                            print(f"🎯 TAVILY TARGET REACHED: {scraped_count + fallback_success_count} total sources")
+                            break
+                    else:
+                        candidate.scraping_error = scraping_result.error_reason or "Tavily fallback scraping failed"
+                        print(f"❌ TAVILY FALLBACK FAILED: {candidate.source_url} - {candidate.scraping_error}")
+                
+                final_scraped_count = scraped_count + fallback_success_count
+                print(f"🔄 TAVILY FALLBACK COMPLETE: +{fallback_success_count} sources, total: {final_scraped_count}/{min_sources_target}")
+            else:
+                print(f"⚠️ TAVILY NO FALLBACK CANDIDATES: No additional sources available to try")
+                final_scraped_count = scraped_count
+        else:
+            print(f"✅ TAVILY SUFFICIENT SOURCES: {scraped_count} sources exceeds target of {min_sources_target}")
+            final_scraped_count = scraped_count
+        
+        # Log comprehensive filtering and quality summary with fallback results
         avg_score = (sum(r.relevance_score for r in results if r.relevance_score) / len([r for r in results if r.relevance_score])) if results and any(r.relevance_score for r in results) else 0
         filter_rate = (filtered_count / raw_result_count * 100) if raw_result_count > 0 else 0
         
-        print(f"📈 TAVILY OPTIMIZATION RESULTS:")
+        print(f"📈 TAVILY OPTIMIZATION RESULTS (WITH ADAPTIVE FALLBACK):")
         print(f"   • Raw API results: {raw_result_count}, Quality filtered: {filtered_count} ({filter_rate:.1f}%)")
         print(f"   • Final quality results: {len(results)}, Avg score: {avg_score:.3f}")
-        print(f"   • Scraped: {scraped_count}/{len(results) if results else 0} ({(scraped_count/len(results)*100) if results else 0:.1f}%)")
+        print(f"   • Final scraped: {final_scraped_count}/{len(results) if results else 0} ({(final_scraped_count/len(results)*100) if results else 0:.1f}%)")
+        print(f"   • Target achievement: {final_scraped_count}/{min_sources_target} ({(final_scraped_count/min_sources_target*100):.1f}%)")
         
         return results
         
