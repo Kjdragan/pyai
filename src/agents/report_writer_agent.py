@@ -886,11 +886,91 @@ async def process_intelligent_report_request(
     style: str = "summary",
     quality_level: str = "standard"
 ) -> AgentResponse:
-    """Process intelligent report generation request with adaptive templates and quality control."""
+    """
+    Process intelligent report generation request with hybrid context management.
+    
+    Automatically determines whether to use traditional or iterative processing based on context size.
+    Maintains full backward compatibility while adding advanced context handling.
+    """
     start_time = asyncio.get_event_loop().time()
 
     try:
-        # Generate intelligent report
+        # Extract data for hybrid system assessment
+        research_data = universal_data.research_data
+        youtube_data = universal_data.youtube_data
+        weather_data = universal_data.weather_data
+        query = universal_data.query
+        
+        try:
+            # Try hybrid system first (handles both small and large contexts intelligently)
+            from utils.iterative_report_writer import generate_hybrid_universal_report
+            
+            print("🔄 Using hybrid report generation system")
+            
+            report_model = await generate_hybrid_universal_report(
+                style=style,
+                query=query,
+                research_data=research_data,
+                youtube_data=youtube_data,
+                weather_data=weather_data,
+                additional_context=f"Quality level: {quality_level}",
+                session_id=None  # Session management handled at orchestrator level
+            )
+            
+            # Convert hybrid system result to legacy format for compatibility
+            processing_time = asyncio.get_event_loop().time() - start_time
+            
+            # Extract metadata from hybrid system
+            generation_metadata = report_model.generation_metadata or {}
+            data_types = universal_data.get_data_types()
+            
+            # Determine source type for compatibility
+            if len(data_types) == 1:
+                source_type = data_types[0]
+            else:
+                source_type = "multi_source"
+            
+            # Create legacy-compatible result
+            legacy_result = ReportGenerationModel(
+                style=style,
+                prompt_template=f"[Hybrid system - {generation_metadata.get('strategy', 'traditional')} processing]",
+                draft=f"[Hybrid generation - {quality_level} quality level - {generation_metadata.get('strategy', 'traditional')} approach]",
+                final=report_model.generated_report,
+                source_type=source_type,
+                word_count=len(report_model.generated_report.split()),
+                generation_time=processing_time,
+                # Enhanced fields
+                quality_level=report_model.quality_level,
+                domain_context=generation_metadata.get('domain', 'general'),
+                confidence_score=report_model.confidence_score,
+                data_sources_count=report_model.sources_processed,
+                enhancement_applied=quality_level in ["enhanced", "premium"],
+                # Hybrid system specific fields
+                processing_approach=report_model.processing_approach,
+                context_size_tokens=report_model.context_size_tokens,
+                sources_processed=report_model.sources_processed
+            )
+            
+            return AgentResponse(
+                agent_name="IntelligentReportWriter",
+                success=True,
+                data=legacy_result.model_dump(),
+                processing_time=processing_time
+            )
+            
+        except ImportError:
+            # Fallback if hybrid system not available (development scenario)
+            print("⚠️ Hybrid system not available, using traditional processing")
+            pass
+        except Exception as e:
+            # Fallback to traditional system if hybrid system fails
+            print(f"⚠️ Hybrid system error, falling back to traditional processing: {e}")
+            pass
+        
+        # Traditional processing fallback (preserves all existing functionality)
+        print("🔄 Using traditional report generation system")
+        
+        # Generate intelligent report using existing system
         final_report = await generate_intelligent_report(
             universal_data=universal_data,
             style=style,
@@ -920,7 +1000,7 @@ async def process_intelligent_report_request(
         result = ReportGenerationModel(
             style=style,
             prompt_template=template[:1000] + "..." if len(template) > 1000 else template,  # Truncate for storage
-            draft=f"[Intelligent generation - {quality_level} quality level]",
+            draft=f"[Traditional generation - {quality_level} quality level]",
             final=final_report,
             source_type=source_type,
             word_count=word_count,
@@ -930,7 +1010,9 @@ async def process_intelligent_report_request(
             domain_context=domain_context,
             confidence_score=calculate_confidence_score(final_report, universal_data),
             data_sources_count=len(data_types),
-            enhancement_applied=quality_level in ["enhanced", "premium"]
+            enhancement_applied=quality_level in ["enhanced", "premium"],
+            # Processing approach tracking
+            processing_approach="traditional"
         )
 
         processing_time = asyncio.get_event_loop().time() - start_time

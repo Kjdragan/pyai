@@ -109,7 +109,7 @@ class ResearchPipelineModel(BaseModel):
 
 
 class ReportGenerationModel(BaseModel):
-    """Enhanced report generation output with quality control and multi-source support."""
+    """Enhanced report generation output with hybrid context management and quality control."""
     style: Literal["comprehensive", "executive", "top_10", "summary", "technical"]
     prompt_template: str
     draft: str
@@ -124,6 +124,12 @@ class ReportGenerationModel(BaseModel):
     confidence_score: Optional[float] = None  # Overall confidence in report accuracy
     data_sources_count: Optional[int] = None
     enhancement_applied: Optional[bool] = False
+    
+    # Hybrid system fields for context management
+    processing_approach: Optional[Literal["traditional", "iterative"]] = "traditional"
+    context_size_tokens: Optional[int] = None
+    sources_processed: Optional[int] = None
+    generation_metadata: Optional[Dict[str, Any]] = None  # Processing details, chunk info, etc.
 
 class UniversalReportData(BaseModel):
     """Universal data container for report generation - can handle any combination of data sources."""

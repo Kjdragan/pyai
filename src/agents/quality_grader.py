@@ -131,11 +131,11 @@ class QualityGrader:
         
         # For Serper, use our calculated quality scores
         if pipeline_type == "serper":
-            # Be more selective with Serper since it doesn't have native quality scores
-            return relevance_score >= 0.7
+            # Use consistent 0.5 threshold with Tavily for more inclusive results
+            return relevance_score >= 0.5
         
-        # Conservative fallback
-        return relevance_score >= 0.8
+        # Use consistent 0.5 threshold for all sources
+        return relevance_score >= 0.5
     
     def grade_result_batch(
         self, 

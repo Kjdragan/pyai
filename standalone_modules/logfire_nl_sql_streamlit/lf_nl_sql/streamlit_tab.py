@@ -11,7 +11,7 @@ from .config import Settings, get_env_source_path
 from .logfire_client import LogfireQueryClient
 from .nl_to_sql import generate_sql
 from .saved_queries import SavedQuery, load_queries, upsert_query
-from .sql_safety import ensure_safe_select
+from .sql_safety import ensure_safe_select, autopatch_sql
 
 
 _TIME_PRESETS = {
@@ -20,6 +20,15 @@ _TIME_PRESETS = {
     "Last 24 hours": timedelta(hours=24),
     "Last 7 days": timedelta(days=7),
 }
+
+
+def _normalize_token(tok: Optional[str]) -> Optional[str]:
+    if not tok:
+        return tok
+    t = tok.strip()
+    if t.lower().startswith("bearer "):
+        t = t[7:].strip()
+    return t
 
 
 def _get_time_bounds(preset: str) -> tuple[Optional[datetime], Optional[datetime]]:
@@ -60,8 +69,8 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
 
     if "sql_text" not in st.session_state:
         st.session_state.sql_text = (
-            "SELECT timestamp, service_name, span_name, trace_id, span_id\n"
-            "FROM records\nORDER BY timestamp DESC\nLIMIT 100;"
+            "SELECT start_timestamp, end_timestamp, service_name, span_name, trace_id, span_id\n"
+            "FROM records\nORDER BY start_timestamp DESC\nLIMIT 100;"
         )
     if "nl_prompt" not in st.session_state:
         st.session_state.nl_prompt = ""
@@ -111,13 +120,57 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
             st.code(cfg.logfire_api_base, language="text")
             st.text("Env source:")
             st.code(str(env_src) if env_src else "<process env>", language="text")
-            override = st.text_input("Override read token (session only)", value="", type="password", help="Paste a valid Logfire READ token to use for this session only. Not saved.")
+
+            # Persist override across reruns: Streamlit clears password fields on rerun.
+            override = st.text_input(
+                "Override read token (session only)",
+                value="",
+                type="password",
+                key="lf_read_token_override_input",
+                help="Paste a valid Logfire READ token to use for this session only. Not saved.",
+            )
             if override:
                 st.session_state["lf_read_token_override"] = override.strip()
                 log.info("Using session token override: True")
-            else:
-                st.session_state["lf_read_token_override"] = ""
-                log.info("Using session token override: False")
+
+            cols_x = st.columns([1, 1, 2])
+            with cols_x[0]:
+                if st.button("Clear override"):
+                    st.session_state.pop("lf_read_token_override", None)
+                    st.session_state.pop("lf_read_token_override_input", None)
+                    log.info("Cleared session token override")
+            with cols_x[1]:
+                eff_token = _normalize_token(st.session_state.get("lf_read_token_override") or cfg.logfire_read_token)
+                if eff_token:
+                    fp = f"{eff_token[:4]}...{eff_token[-4:]}"
+                else:
+                    fp = "<none>"
+                st.caption(f"Active token fingerprint: {fp}")
+
+            # Test connection button
+            if st.button("Test Connection"):
+                tkn = _normalize_token(st.session_state.get("lf_read_token_override") or cfg.logfire_read_token)
+                if not tkn:
+                    st.error("No read token configured. Set it in .env or provide an override above.")
+                else:
+                    tclient = LogfireQueryClient(cfg.logfire_api_base, tkn, default_accept=cfg.accept_format)
+                    try:
+                        test_sql = (
+                            "SELECT start_timestamp FROM records ORDER BY start_timestamp DESC LIMIT 1"
+                        )
+                        tq = ensure_safe_select(test_sql)
+                        tq, _ = autopatch_sql(tq)
+                        with st.spinner("Testing connection..."):
+                            df, meta = tclient.query(tq, accept=cfg.accept_format, limit=1)
+                        st.success(f"Connection OK (status {meta['status_code']}).")
+                        if df is not None and not df.empty:
+                            st.caption("Sample row:")
+                            st.dataframe(df, use_container_width=True)
+                    except Exception as e:
+                        logging.getLogger(__name__).exception("Test connection failed")
+                        st.error(f"Test failed: {e}")
+                    finally:
+                        tclient.close()
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -131,11 +184,18 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
 
         if run:
             with st.spinner("Querying Logfire..."):
-                token = st.session_state.get("lf_read_token_override") or cfg.logfire_read_token
+                token = _normalize_token(st.session_state.get("lf_read_token_override") or cfg.logfire_read_token)
+                if not token:
+                    st.error("No read token configured. Set it in .env or provide an override in the Connection section.")
+                    log.warning("Run Query attempted without a token")
+                    return
                 client = LogfireQueryClient(cfg.logfire_api_base, token, default_accept=fmt)
                 try:
                     # Safety: allow only single, read-only SELECT
                     safe_sql = ensure_safe_select(st.session_state.sql_text)
+                    patched_sql, notes = autopatch_sql(safe_sql)
+                    if notes:
+                        st.caption("Applied SQL patches: " + "; ".join(notes))
                 except Exception as e:
                     log.warning("Unsafe SQL rejected: %s", e)
                     st.error(f"Unsafe SQL: {e}")
@@ -144,7 +204,7 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
                 try:
                     min_ts, max_ts = _get_time_bounds(preset)
                     log.info("Run query | preset=%s min_ts=%s max_ts=%s limit=%s fmt=%s", preset, min_ts, max_ts, row_limit, fmt)
-                    df, meta = client.query(safe_sql, accept=fmt, min_ts=min_ts, max_ts=max_ts, limit=row_limit)
+                    df, meta = client.query(patched_sql, accept=fmt, min_ts=min_ts, max_ts=max_ts, limit=row_limit)
                 except Exception as e:
                     log.exception("Query failed")
                     st.error(f"Query failed: {e}")
@@ -167,9 +227,9 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
                     trace_id = st.text_input("Enter a trace_id from the results")
                     if st.button("Fetch Trace Spans") and trace_id.strip():
                         q = (
-                            "SELECT timestamp, service_name, span_name, trace_id, span_id, attributes "
+                            "SELECT start_timestamp, end_timestamp, service_name, span_name, trace_id, span_id, attributes "
                             "FROM records WHERE trace_id = '" + trace_id.replace("'", "''") + "' "
-                            "ORDER BY timestamp ASC LIMIT 200;"
+                            "ORDER BY start_timestamp ASC LIMIT 200;"
                         )
                         try:
                             tq = ensure_safe_select(q)
@@ -177,7 +237,7 @@ def render_nl_sql_tab(state=None, config: Optional[Settings] = None) -> None:
                             log.warning("Unsafe trace lookup SQL: %s", e)
                             st.error(f"Unsafe SQL for trace lookup: {e}")
                         else:
-                            t_token = st.session_state.get("lf_read_token_override") or cfg.logfire_read_token
+                            t_token = _normalize_token(st.session_state.get("lf_read_token_override") or cfg.logfire_read_token)
                             tclient = LogfireQueryClient(cfg.logfire_api_base, t_token, default_accept=fmt)
                             try:
                                 log.info("Trace lookup start trace_id=%s", trace_id.strip())

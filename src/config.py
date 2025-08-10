@@ -61,7 +61,7 @@ class Config:
     TAVILY_TIME_RANGE: str = os.getenv("TAVILY_TIME_RANGE", "month")
     TAVILY_SEARCH_DEPTH: str = os.getenv("TAVILY_SEARCH_DEPTH", "advanced")
     TAVILY_MIN_SCORE: float = float(os.getenv("TAVILY_MIN_SCORE", "0.5"))
-    TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.6"))  # Scrape good quality results
+    TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.5"))  # Scrape good quality results
     TAVILY_RATE_LIMIT_RPS: int = int(os.getenv("TAVILY_RATE_LIMIT_RPS", "5"))
     TAVILY_MAX_RESULTS: int = int(os.getenv("TAVILY_MAX_RESULTS", "50"))  # Get full result set from API
 
@@ -151,6 +151,32 @@ class Config:
         """Check if the model is the nano (fast/cheap) model."""
         return model == cls.NANO_MODEL
 
+    @classmethod
+    def get_model_for_task(cls, task_type: str) -> str:
+        """Get the appropriate model for a specific task type."""
+        task_model_map = {
+            # Report enhancement needs reasoning capability but not maximum model
+            "report_enhancement": cls.REPORT_MODEL,
+            # Domain classification can use fast model 
+            "domain_classification": cls.NANO_MODEL,
+            # Content cleaning and processing
+            "content_cleaning": cls.STANDARD_MODEL,
+            # Research synthesis
+            "research_synthesis": cls.RESEARCH_MODEL,
+            # Query expansion
+            "query_expansion": cls.STANDARD_MODEL,
+            # Default report writing
+            "report_generation": cls.REPORT_MODEL,
+            # Context assessment (simple task)
+            "context_assessment": cls.NANO_MODEL,
+        }
+        return task_model_map.get(task_type.lower(), cls.DEFAULT_MODEL)
+
 
 # Global config instance
 config = Config()
+
+
+def get_model_for_task(task_type: str) -> str:
+    """Global function to get the appropriate model for a specific task type."""
+    return config.get_model_for_task(task_type)

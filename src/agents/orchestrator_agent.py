@@ -1010,7 +1010,7 @@ async def dispatch_to_intelligent_report_writer(
     style: str = "summary",
     quality_level: str = "standard"
 ) -> str:
-    """Dispatch job to Intelligent Report Writer with adaptive templates and quality control."""
+    """Dispatch job to Intelligent Report Writer with hybrid context management and adaptive templates."""
     agent_name = "IntelligentReportWriter"
     
     # Check if this agent has already been completed successfully
@@ -1043,14 +1043,81 @@ async def dispatch_to_intelligent_report_writer(
             else:
                 quality_level = "standard"
         
+        # HYBRID SYSTEM: Assess context size and determine processing strategy
+        from utils.context_assessment import assess_universal_context, get_context_summary
+        
+        # Convert universal data to hybrid system format for assessment
+        research_data = universal_data.research_data
+        youtube_data = universal_data.youtube_data
+        weather_data = universal_data.weather_data
+        
+        # Perform context assessment
+        context_assessment = assess_universal_context(
+            research_data=research_data,
+            youtube_data=youtube_data,
+            weather_data=weather_data,
+            additional_context=f"Query: {query}, Style: {style}, Quality: {quality_level}"
+        )
+        
+        # Stream context assessment to user
+        context_summary = get_context_summary(context_assessment)
         await stream_update(StreamingUpdate(
             update_type="status",
             agent_name="Orchestrator",
-            message=f"Generating {style} {quality_level}-quality report from {len(universal_data.get_data_types())} data sources"
+            message=f"📊 Smart Context Assessment: {context_assessment.recommended_strategy.title()} processing strategy selected"
+        ))
+        print(f"🔍 {context_summary}")
+        
+        processing_approach = context_assessment.recommended_strategy
+        data_types = universal_data.get_data_types()
+        
+        await stream_update(StreamingUpdate(
+            update_type="status",
+            agent_name="Orchestrator",
+            message=f"Generating {style} {quality_level}-quality report using {processing_approach} approach from {len(data_types)} data sources"
         ))
         
         try:
-            # Use new intelligent report generation system
+            # Use new hybrid report generation system while preserving all existing functionality
+            from utils.iterative_report_writer import generate_hybrid_universal_report
+            
+            # Generate report using hybrid system
+            report_model = await generate_hybrid_universal_report(
+                style=style,
+                query=query,
+                research_data=research_data,
+                youtube_data=youtube_data,
+                weather_data=weather_data,
+                additional_context=f"Quality level: {quality_level}",
+                session_id=ctx.deps.session_id if hasattr(ctx.deps, 'session_id') else None
+            )
+            
+            # Convert to legacy format for compatibility
+            response = AgentResponse(
+                agent_name=agent_name,
+                success=True,
+                data=report_model.model_dump(),
+                processing_time=report_model.generation_metadata.get('total_processing_time_seconds', 0)
+            )
+            
+            # Add processing approach to metadata
+            response.data['processing_approach'] = processing_approach
+            response.data['context_assessment'] = {
+                'total_tokens': context_assessment.total_estimated_tokens,
+                'strategy': context_assessment.recommended_strategy,
+                'chunks_needed': context_assessment.estimated_chunks,
+                'reasoning': context_assessment.reasoning
+            }
+            
+        except Exception as e:
+            # Fallback to traditional system for compatibility
+            print(f"⚠️ Hybrid system error, falling back to traditional processing: {e}")
+            await stream_update(StreamingUpdate(
+                update_type="status",
+                agent_name="Orchestrator", 
+                message="Falling back to traditional report generation"
+            ))
+            
             from agents.report_writer_agent import process_intelligent_report_request
             
             response = await process_intelligent_report_request(
@@ -1058,14 +1125,6 @@ async def dispatch_to_intelligent_report_writer(
                 style=style,
                 quality_level=quality_level
             )
-        except Exception as e:
-            response = AgentResponse(
-                agent_name=agent_name,
-                success=False,
-                data={},
-                error=str(e)
-            )
-            ctx.deps.errors.append(f"Intelligent Report Writer: {str(e)}")
         
         # Cache the result regardless of success/failure
         ctx.deps.agent_results[agent_name] = {
@@ -1089,8 +1148,9 @@ async def dispatch_to_intelligent_report_writer(
             data_types = universal_data.get_data_types()
             word_count = response.data.get('word_count', 0)
             processing_time = response.processing_time or 0
+            approach_info = f" ({processing_approach})" if processing_approach == "iterative" else ""
             
-            return f"Intelligent {style} report generated successfully! Quality: {quality_level}, " \
+            return f"Intelligent {style} report generated successfully{approach_info}! Quality: {quality_level}, " \
                    f"Sources: {', '.join(data_types)}, Length: {word_count} words, " \
                    f"Time: {processing_time:.1f}s"
         else:

@@ -18,8 +18,13 @@ def _build_prompt(user_prompt: str, mode: str = "new", existing_sql: Optional[st
     header = (
         "You are a SQL assistant for querying Logfire data. "
         "Only produce a valid SELECT SQL query for Apache DataFusion/Postgres-like dialect. "
-        "Constraints: use only tables records (and metrics if asked), prefer JSON extraction operators, "
-        "include a LIMIT, never DDL/DML."
+        "Constraints: use only table records (and metrics if asked); prefer JSON extraction operators; "
+        "there is NO 'timestamp' column—use start_timestamp (span start) and end_timestamp (span end). "
+        "The app supplies time filters, so you may omit explicit time predicates unless necessary. "
+        "For latency percentiles, DO NOT use approx_percentile; use ordered-set approx_percentile_cont(p) WITHIN GROUP (ORDER BY expr). "
+        "Compute duration expr as EXTRACT(EPOCH FROM (end_timestamp - start_timestamp)) * 1000 (ms). "
+        "For error rate, consider any of: array_has(tags, 'error'), CAST(attributes->'http'->>'status_code' AS INT) >= 500, "
+        "or (attributes->'otel'->>'status_code') = 'ERROR'. Always include a LIMIT. Never output DDL/DML."
     )
     examples = "\n\n".join(FEW_SHOT_EXAMPLES)
     if mode == "modify" and existing_sql:
@@ -72,8 +77,8 @@ def generate_sql(
 
     # Fallback: produce a safe baseline for manual editing
     return (
-        "SELECT timestamp, service_name, span_name, trace_id, span_id\n"
+        "SELECT start_timestamp, end_timestamp, service_name, span_name, trace_id, span_id\n"
         "FROM records\n"
-        "ORDER BY timestamp DESC\n"
+        "ORDER BY start_timestamp DESC\n"
         "LIMIT 100;"
     )

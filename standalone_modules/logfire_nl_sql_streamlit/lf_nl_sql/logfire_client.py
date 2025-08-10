@@ -25,10 +25,12 @@ class LogfireQueryClient:
         self.read_token = read_token
         self.default_accept = default_accept
         self._client = httpx.Client(timeout=60.0)
+        fp = f"{read_token[:4]}...{read_token[-4:]}" if read_token else "<none>"
         self._log.debug(
-            "Initialized LogfireQueryClient base_url=%s default_accept=%s",
+            "Initialized LogfireQueryClient base_url=%s default_accept=%s auth_fp=%s",
             self.base_url,
             self.default_accept,
+            fp,
         )
 
     def close(self) -> None:
