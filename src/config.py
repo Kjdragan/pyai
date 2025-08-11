@@ -54,15 +54,20 @@ class Config:
 
     # Research Settings
     MAX_RESEARCH_RESULTS: int = int(os.getenv("MAX_RESEARCH_RESULTS", "15"))  # Increased for more comprehensive research
-    MAX_SCRAPING_PER_QUERY: int = int(os.getenv("MAX_SCRAPING_PER_QUERY", "8"))  # Limit expensive scraping operations
+    MAX_SCRAPING_PER_QUERY: int = int(os.getenv("MAX_SCRAPING_PER_QUERY", "50"))  # High limit - parallel scraping handles volume efficiently
+    MIN_SCRAPED_SOURCES_TARGET: int = int(os.getenv("MIN_SCRAPED_SOURCES_TARGET", "20"))  # Adaptive fallback scraping target (includes PDFs)
     RESEARCH_TIMEOUT: int = int(os.getenv("RESEARCH_TIMEOUT", "60"))
 
     # Tavily-specific Settings
     TAVILY_TIME_RANGE: str = os.getenv("TAVILY_TIME_RANGE", "month")
     TAVILY_SEARCH_DEPTH: str = os.getenv("TAVILY_SEARCH_DEPTH", "advanced")
     TAVILY_MIN_SCORE: float = float(os.getenv("TAVILY_MIN_SCORE", "0.5"))
-    TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.6"))  # Scrape good quality results
+    TAVILY_SCRAPING_THRESHOLD: float = float(os.getenv("TAVILY_SCRAPING_THRESHOLD", "0.5"))  # Scrape good quality results
     TAVILY_RATE_LIMIT_RPS: int = int(os.getenv("TAVILY_RATE_LIMIT_RPS", "5"))
+    TAVILY_MAX_RESULTS: int = int(os.getenv("TAVILY_MAX_RESULTS", "50"))  # Get full result set from API
+
+    # Serper-specific Settings
+    SERPER_MAX_RESULTS: int = int(os.getenv("SERPER_MAX_RESULTS", "20"))  # Maximum reliable results per query
 
     # Streamlit Settings
     STREAMLIT_PORT: int = int(os.getenv("STREAMLIT_PORT", "8501"))
@@ -77,7 +82,7 @@ class Config:
 
     # State logging/truncation settings
     WRITE_TRUNCATED_STATE_COPY: bool = os.getenv("WRITE_TRUNCATED_STATE_COPY", "true").lower() == "true"
-    LLM_STATE_MAX_FIELD_CHARS: int = int(os.getenv("LLM_STATE_MAX_FIELD_CHARS", "1000"))
+    LLM_STATE_MAX_FIELD_CHARS: int = int(os.getenv("LLM_STATE_MAX_FIELD_CHARS", "600"))
     # Comma-separated list of fields to truncate in the LLM-friendly state copy
     LLM_STATE_TRUNCATE_FIELDS: list[str] = [f.strip() for f in os.getenv(
         "LLM_STATE_TRUNCATE_FIELDS",
@@ -86,12 +91,19 @@ class Config:
 
     # Research parallelism & behavior flags
     RESEARCH_PARALLELISM_ENABLED: bool = os.getenv("RESEARCH_PARALLELISM_ENABLED", "false").lower() == "true"
-    RESEARCH_MAX_CONCURRENCY: int = int(os.getenv("RESEARCH_MAX_CONCURRENCY", "8"))
-    SERPER_MAX_CONCURRENCY: int = int(os.getenv("SERPER_MAX_CONCURRENCY", "5"))
+    RESEARCH_MAX_CONCURRENCY: int = int(os.getenv("RESEARCH_MAX_CONCURRENCY", "20"))
+    SERPER_MAX_CONCURRENCY: int = int(os.getenv("SERPER_MAX_CONCURRENCY", "20"))
     # Prevent agents from expanding queries on their own unless explicitly allowed
     ALLOW_AGENT_QUERY_EXPANSION: bool = os.getenv("ALLOW_AGENT_QUERY_EXPANSION", "false").lower() == "true"
     # Simple, global garbage filter quality threshold (0..1). Default unchanged unless user tests step-back.
     GARBAGE_FILTER_THRESHOLD: float = float(os.getenv("GARBAGE_FILTER_THRESHOLD", "0.2"))
+
+    # Query Strategy Settings
+    INCLUDE_ORIGINAL_QUERY: bool = os.getenv("INCLUDE_ORIGINAL_QUERY", "true").lower() == "true"  # Process 4 queries instead of 3
+    ENABLE_URL_DEDUPLICATION: bool = os.getenv("ENABLE_URL_DEDUPLICATION", "true").lower() == "true"  # Cross-API deduplication
+    
+    # Content Processing Optimization
+    MAX_PARALLEL_CLEANING: bool = os.getenv("MAX_PARALLEL_CLEANING", "true").lower() == "true"  # Remove batch limits for LLM cleaning
 
     # Content cleaning behavior - PDF processing now enabled with local text extraction
     CLEANING_SKIP_PDFS: bool = os.getenv("CLEANING_SKIP_PDFS", "false").lower() == "true"  # Enable PDF processing by default

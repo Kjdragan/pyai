@@ -359,7 +359,7 @@ async def dispatch_parallel_independent_agents(ctx: RunContext[OrchestratorDeps]
             task_names.append("Weather")
         
         elif agent_name in ["research", "tavily", "serper"]:
-            task = dispatch_to_research_agents(ctx, task_description, "both")
+            task = dispatch_to_research_agents(ctx, task_description, "serper")
             parallel_tasks.append(task)
             task_names.append("Research")
     
@@ -425,7 +425,10 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
     needs_youtube = intent_analysis.needs_youtube
     needs_weather = intent_analysis.needs_weather
     needs_research = intent_analysis.needs_research
-    needs_report = intent_analysis.needs_report
+    
+    # CRITICAL FIX: Research requests should automatically generate reports
+    # Raw research data without synthesis is not useful to users
+    needs_report = intent_analysis.needs_report or needs_research
     
     print(f"🧠 LLM Intent Analysis: Research={needs_research}, YouTube={needs_youtube}, Weather={needs_weather}, Report={needs_report}, Confidence={intent_analysis.confidence_score:.2f}")
     if intent_analysis.research_rationale:
@@ -465,7 +468,7 @@ async def analyze_and_execute_optimal_workflow(ctx: RunContext[OrchestratorDeps]
         phase1_names.append("Weather")
     
     if needs_research and "ResearchAgents" not in ctx.deps.completed_agents:
-        phase1_tasks.append(dispatch_to_research_agents(ctx, user_query, "both"))
+        phase1_tasks.append(dispatch_to_research_agents(ctx, user_query, "serper"))
         phase1_names.append("Research")
     
     # Execute Phase 1 (parallel data collection)
@@ -831,16 +834,25 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
         await stream_update(StreamingUpdate(
             update_type="status",
             agent_name="Orchestrator",
-            message=f"Using {len(centralized_sub_queries)} shared sub-queries for both research APIs"
+            message=f"Using {len(centralized_sub_queries)} shared sub-queries for Serper research API"
         ))
         
-        # PERFORMANCE OPTIMIZATION: Run research APIs in parallel instead of sequential
-        # This saves 2-3 minutes by executing Tavily and Serper concurrently
+        # PERFORMANCE OPTIMIZATION: Using only Serper research API for simpler development
+        # This reduces complexity and avoids context window issues from Tavily
         
         # Prepare parallel task execution
         research_tasks = []
         task_names = []
-        sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(centralized_sub_queries)])
+        
+        # FOUR-QUERY STRATEGY: Include original query as fourth query if enabled
+        all_queries = centralized_sub_queries.copy()  # Start with 3 sub-queries
+        if config.INCLUDE_ORIGINAL_QUERY:
+            # Add original query as the fourth query for improved source diversity
+            all_queries.append(query)
+            print(f"🎯 FOUR-QUERY STRATEGY: Added original query as 4th query for source diversity")
+            print(f"📝 All queries: {all_queries}")
+        
+        sub_queries_text = "\n".join([f"{i+1}. {q}" for i, q in enumerate(all_queries)])
         
         # Create Tavily task if needed
         if pipeline in ["tavily", "both"]:
@@ -857,26 +869,29 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
             research_tasks.append(tavily_task)
             task_names.append("Tavily")
         
-        # Create Serper task if needed  
+        # Create separate Serper tasks for each sub-query (TRUE PARALLELISM)
         if pipeline in ["serper", "both"]:
             from agents.research_serper_agent import serper_research_agent, SerperResearchDeps
-            serper_deps = SerperResearchDeps()
             
-            serper_task = serper_research_agent.run(
-                f"Use your perform_serper_research tool to conduct comprehensive research on: {query}. "
-                f"IMPORTANT: Use these pre-generated sub-queries instead of generating your own:\n{sub_queries_text}\n"
-                f"Please search for real web sources and return structured results with actual URLs and data.",
-                deps=serper_deps,
-                usage=ctx.usage
-            )
-            research_tasks.append(serper_task)
-            task_names.append("Serper")
+            print(f"🚀 ORCHESTRATOR PARALLELISM: Launching {len(all_queries)} separate Serper agents in parallel")
+            
+            for i, sub_query in enumerate(all_queries):
+                serper_deps = SerperResearchDeps()
+                
+                serper_task = serper_research_agent.run(
+                    f"Use your perform_serper_research tool to conduct comprehensive research on: {sub_query}. "
+                    f"IMPORTANT: Process this single query directly - do not expand into sub-queries.",
+                    deps=serper_deps,
+                    usage=ctx.usage
+                )
+                research_tasks.append(serper_task)
+                task_names.append(f"Serper-{i+1}")
         
         # Execute all research tasks concurrently
         await stream_update(StreamingUpdate(
             update_type="status",
             agent_name="Orchestrator", 
-            message=f"Running {len(research_tasks)} research APIs in parallel for maximum speed"
+            message=f"Running Serper research API for comprehensive web search"
         ))
         
         # Wait for all tasks to complete
@@ -962,7 +977,7 @@ async def dispatch_to_research_agents(ctx: RunContext[OrchestratorDeps], query: 
                 original_query=primary_query,
                 sub_queries=centralized_sub_queries,  # Use centralized sub-queries to prevent duplication
                 results=all_research_results,
-                pipeline_type="combined_tavily_serper",
+                pipeline_type="serper",
                 total_results=len(all_research_results),
                 processing_time=0.0
             )

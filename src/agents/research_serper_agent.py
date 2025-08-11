@@ -4,6 +4,8 @@ Uses Google Search via Serper API for high-quality research results.
 """
 
 import asyncio
+import httpx
+import time
 from typing import List, Optional
 from datetime import datetime
 from pydantic_ai import Agent, RunContext
@@ -68,7 +70,7 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
     
     payload = {
         "q": query,
-        "num": max_results,
+        "num": config.SERPER_MAX_RESULTS,  # Use optimized result count
         "hl": "en",
         "gl": "us"
     }
@@ -81,19 +83,27 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
             data = response.json()
             results = []
             
-            # Process organic results with intelligent quality grading
+            # Process organic results with position-based quality scoring
             raw_results = []
-            for i, item in enumerate(data.get("organic", [])[:max_results]):
+            organic_results = data.get("organic", [])[:config.SERPER_MAX_RESULTS]  # Use full result set
+            
+            print(f"📊 SERPER OPTIMIZATION: Processing {len(organic_results)} results from API")
+            
+            for i, item in enumerate(organic_results):
                 basic_snippet = item.get("snippet", "")
                 source_url = item.get("link", "")
                 
-                # Create initial research item for quality evaluation (no scraping yet)
+                # Calculate position-based relevance score (1.0 for position 1, decreasing to 0.05 for position 20)
+                # Google's organic ranking provides implicit quality - higher positions = higher quality
+                position_score = max(0.05, 1.0 - (i * 0.05))  # Position 1 = 1.0, Position 20 = 0.05
+                
+                # Create initial research item with position-based scoring
                 result = ResearchItem(
                     query_variant=query,
                     source_url=source_url,
                     title=item.get("title", ""),
                     snippet=basic_snippet,
-                    relevance_score=None,  # Will be calculated by quality grader
+                    relevance_score=position_score,  # Position-based quality score
                     timestamp=now(),
                     content_scraped=False,
                     scraping_error=None,
@@ -101,6 +111,8 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                     scraped_content=None
                 )
                 raw_results.append(result)
+                
+                print(f"🎯 SERPER QUALITY: Position {i+1} → Score {position_score:.3f} for {source_url}")
             
             # Apply intelligent quality grading to determine what to scrape
             print(f"📊 SERPER DEBUG: Applying quality grading to {len(raw_results)} results")
@@ -115,18 +127,31 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                 
                 if should_scrape and result.source_url:
                     print(f"🚀 SERPER DEBUG: High-quality result - scraping {result.source_url} (score: {result.relevance_score:.2f})")
-                    scraped_content = await scrape_url_content(result.source_url, max_chars=10000)
                     
-                    if scraped_content:
-                        result.scraped_content = scraped_content
+                    # Use detailed scraper to get metadata about PDF extraction
+                    scraping_result = await scrape_url_content_detailed(result.source_url, max_chars=10000)
+                    
+                    if scraping_result.success:
+                        result.scraped_content = scraping_result.content
                         result.content_scraped = True
-                        result.content_length = len(scraped_content)
+                        result.content_length = len(scraping_result.content)
+                        # CRITICAL: Mark if content came from PDF extraction (exempt from garbage filtering)
+                        result.is_pdf_content = scraping_result.content_length > 50000  # Large content likely from PDF
+                        # More precise PDF detection using URL analysis
+                        from urllib.parse import urlparse
+                        try:
+                            path = urlparse(result.source_url).path.lower()
+                            if path.endswith('.pdf') or '.pdf' in path:
+                                result.is_pdf_content = True
+                                print(f"📄 SERPER DEBUG: PDF content detected for {result.source_url} - will bypass garbage filtering")
+                        except:
+                            pass
                         # Preserve exact raw scraped text for quote retention analysis
-                        result.raw_content = scraped_content
-                        result.raw_content_length = len(scraped_content)
+                        result.raw_content = scraping_result.content
+                        result.raw_content_length = len(scraping_result.content)
                         print(f"✅ SERPER DEBUG: Successfully scraped {result.content_length} chars from {result.source_url}")
                     else:
-                        result.scraping_error = "Failed to scrape content"
+                        result.scraping_error = scraping_result.error_reason or "Failed to scrape content"
                         print(f"❌ SERPER DEBUG: Failed to scrape content from {result.source_url}")
                 else:
                     skip_reason = result.metadata.get('skip_reason', 'Quality threshold not met')
@@ -134,9 +159,118 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                 
                 final_results.append(result)
             
-            # Log quality summary
+            # FUNNEL TRACKING: Count final results
+            if result.content_scraped or result.snippet:
+                funnel_metrics['final_research_items'] += 1
+            
+            # ADAPTIVE FALLBACK SCRAPING: Ensure we have at least 20 total successful sources (including PDFs)
+            scraped_count = sum(1 for r in final_results if r.content_scraped)
+            min_sources_target = config.MIN_SCRAPED_SOURCES_TARGET
+            
+            print(f"🔍 ADAPTIVE SCRAPING CHECK: {scraped_count} successful sources (including PDFs), target: {min_sources_target}")
+            
+            if scraped_count < min_sources_target:
+                print(f"⚠️ FALLBACK TRIGGERED: Only {scraped_count}/{min_sources_target} sources scraped successfully")
+                
+                # OPTIMIZED FALLBACK: Get candidates for fallback scraping (previously skipped, sorted by score)
+                fallback_candidates = []
+                for result in final_results:
+                    # Skip if already successfully scraped
+                    if result.content_scraped:
+                        continue
+                    
+                    # Skip if no URL or previous scraping error 
+                    if not result.source_url or result.scraping_error:
+                        continue
+                        
+                    # Include items that weren't originally scheduled for scraping (below quality threshold)
+                    if not result.metadata.get('should_scrape', False):
+                        fallback_candidates.append(result)
+                
+                # Sort fallback candidates by relevance score (best first)
+                fallback_candidates.sort(key=lambda x: x.relevance_score or 0, reverse=True)
+                
+                needed_sources = min_sources_target - scraped_count
+                # PERFORMANCE: Try 2.5x needed sources to ensure we hit target despite failures
+                candidates_to_try = fallback_candidates[:max(needed_sources * 3, 10)]  # Minimum 10, scale with need
+                
+                print(f"🔄 FALLBACK SCRAPING: Trying {len(candidates_to_try)} additional sources from fallback queue (need {needed_sources} more)")
+                
+                # EFFICIENT PARALLEL FALLBACK: Launch all fallback scraping simultaneously
+                fallback_tasks = []
+                for candidate in candidates_to_try:
+                    print(f"🎯 FALLBACK: Queuing {candidate.source_url} (score: {candidate.relevance_score:.2f})")
+                    task = scrape_url_content_detailed(candidate.source_url, max_chars=10000)
+                    fallback_tasks.append((candidate, task))
+                
+                # Execute all fallback scraping in parallel for maximum efficiency
+                if fallback_tasks:
+                    print(f"🚀 PARALLEL FALLBACK: Launching {len(fallback_tasks)} scraping tasks simultaneously")
+                    fallback_results = await asyncio.gather(*[task for _, task in fallback_tasks], return_exceptions=True)
+                    
+                    fallback_success_count = 0
+                    for (candidate, _), scraping_result in zip(fallback_tasks, fallback_results):
+                        if isinstance(scraping_result, Exception):
+                            print(f"❌ FALLBACK FAILED: {candidate.source_url} - Exception: {scraping_result}")
+                            continue
+                        
+                        # Early termination if we've reached our target
+                        current_total = scraped_count + fallback_success_count
+                        if current_total >= min_sources_target:
+                            print(f"🎯 TARGET REACHED: {current_total} sources, stopping fallback processing")
+                            break
+                            
+                        if scraping_result.success:
+                            # Update the candidate with scraped content
+                            candidate.scraped_content = scraping_result.content
+                            candidate.content_scraped = True
+                            candidate.content_length = len(scraping_result.content)
+                            candidate.scraping_error = None
+                            
+                            # PDF detection for garbage filter exemption
+                            candidate.is_pdf_content = scraping_result.content_length > 50000
+                            from urllib.parse import urlparse
+                            try:
+                                path = urlparse(candidate.source_url).path.lower()
+                                if path.endswith('.pdf') or '.pdf' in path:
+                                    candidate.is_pdf_content = True
+                            except:
+                                pass
+                                
+                            # Preserve raw content
+                            candidate.raw_content = scraping_result.content
+                            candidate.raw_content_length = len(scraping_result.content)
+                            
+                            fallback_success_count += 1
+                            print(f"✅ FALLBACK SUCCESS: {candidate.source_url} - {candidate.content_length} chars")
+                            
+                            # Stop if we've reached our target
+                            if scraped_count + fallback_success_count >= min_sources_target:
+                                print(f"🎯 TARGET REACHED: {scraped_count + fallback_success_count} total sources")
+                                break
+                        else:
+                            candidate.scraping_error = scraping_result.error_reason or "Fallback scraping failed"
+                            print(f"❌ FALLBACK FAILED: {candidate.source_url} - {candidate.scraping_error}")
+                    
+                    final_scraped_count = scraped_count + fallback_success_count
+                    print(f"🔄 FALLBACK COMPLETE: +{fallback_success_count} sources, total: {final_scraped_count}/{min_sources_target}")
+                else:
+                    print(f"⚠️ NO FALLBACK CANDIDATES: No additional sources available to try")
+                    final_scraped_count = scraped_count
+            else:
+                print(f"✅ SUFFICIENT SOURCES: {scraped_count} sources exceeds target of {min_sources_target}")
+                final_scraped_count = scraped_count
+            
+            # Log comprehensive optimization summary with fallback results
+            avg_position_score = sum(r.relevance_score for r in final_results if r.relevance_score) / len(final_results) if final_results else 0
             quality_summary = quality_grader.get_quality_summary(final_results)
-            print(f"📈 SERPER QUALITY SUMMARY: {quality_summary}")
+            
+            print(f"📈 SERPER OPTIMIZATION RESULTS (WITH ADAPTIVE FALLBACK):")
+            print(f"   • API results processed: {len(organic_results)} (max: {config.SERPER_MAX_RESULTS})")
+            print(f"   • Position-based avg score: {avg_position_score:.3f}")
+            print(f"   • Final scraped: {final_scraped_count}/{len(final_results)} ({(final_scraped_count/len(final_results)*100) if final_results else 0:.1f}%)")
+            print(f"   • Target achievement: {final_scraped_count}/{min_sources_target} ({(final_scraped_count/min_sources_target*100):.1f}%)")
+            print(f"   • Quality grader summary: {quality_summary}")
             
             return final_results
             
@@ -180,6 +314,8 @@ def clean_and_format_results(results: List[ResearchItem], original_query: str) -
                 scraping_error=result.scraping_error,
                 content_length=result.content_length,
                 scraped_content=cleaned_scraped_content,  # Full content for report generation (NOT truncated)
+                # CRITICAL: Preserve PDF flag for garbage filter exemption
+                is_pdf_content=getattr(result, 'is_pdf_content', False),
                 # Preserve raw content and cleaning metadata
                 raw_content=result.raw_content,
                 raw_content_length=result.raw_content_length,
@@ -291,59 +427,122 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         
         print(f"✅ SERPER TOOL DEBUG: API key configured, current date: {ctx.deps.current_date}")
         
-        # Check if pre-generated sub-queries are provided in the query (centralized approach)
-        # This prevents duplicate query expansion across multiple research APIs
-        import re
-        sub_query_match = re.search(r'Use these pre-generated sub-queries.*?:\n((?:\d+\.\s+.*\n?)+)', query, re.DOTALL)
-        
-        if sub_query_match:
-            # Extract pre-generated sub-queries from orchestrator
-            sub_queries_text = sub_query_match.group(1)
-            sub_questions = []
-            for line in sub_queries_text.strip().split('\n'):
-                if line.strip() and re.match(r'\d+\.\s+', line):
-                    sub_question = re.sub(r'^\d+\.\s+', '', line.strip())
-                    sub_questions.append(sub_question)
-            print(f"🎯 SERPER TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
-            print(f"📝 Sub-queries: {sub_questions}")
+        # NEW APPROACH: Process single query directly from orchestrator
+        # Each agent instance now handles one specific query instead of multiple sub-queries
+        if "Process this single query directly" in query:
+            # Extract the actual query from the orchestrator instruction
+            actual_query = query.split("comprehensive research on: ")[1].split(". IMPORTANT:")[0]
+            sub_questions = [actual_query]
+            print(f"🎯 SERPER TOOL DEBUG: Processing single query from orchestrator: '{actual_query}'")
         else:
-            # CRITICAL FIX: Use single query as fallback instead of generating new sub-queries
-            # This prevents the infinite loop that was causing 58+ API calls
-            sub_questions = [query]
-            print(f"🎯 SERPER TOOL DEBUG: Using single query fallback (no pre-generated sub-queries found)")
+            # Legacy fallback for backward compatibility
+            import re
+            sub_query_match = re.search(r'Use these pre-generated sub-queries.*?:\n((?:\d+\.\s+.*\n?)+)', query, re.DOTALL)
+            
+            if sub_query_match:
+                # Extract pre-generated sub-queries from orchestrator
+                sub_queries_text = sub_query_match.group(1)
+                sub_questions = []
+                for line in sub_queries_text.strip().split('\n'):
+                    if line.strip() and re.match(r'\d+\.\s+', line):
+                        sub_question = re.sub(r'^\d+\.\s+', '', line.strip())
+                        sub_questions.append(sub_question)
+                print(f"🎯 SERPER TOOL DEBUG: Using {len(sub_questions)} pre-generated sub-queries from orchestrator")
+                print(f"📝 Sub-queries: {sub_questions}")
+            else:
+                # CRITICAL FIX: Use single query as fallback instead of generating new sub-queries
+                # This prevents the infinite loop that was causing 58+ API calls
+                sub_questions = [query]
+                print(f"🎯 SERPER TOOL DEBUG: Using single query fallback (no pre-generated sub-queries found)")
         
         # Perform parallel searches with full result capacity per sub-query
         # This allows comprehensive research coverage instead of artificially limiting results
-        # Execute searches with optional bounded parallelism
+        # Execute searches with optional bounded parallelism + FUNNEL TRACKING
+        start_time = time.time()
+        print(f"🚀 PARALLELISM DEBUG: Starting {len(sub_questions)} queries in parallel at {start_time:.2f}")
+        
+        # FUNNEL PERFORMANCE: Initialize tracking metrics
+        funnel_metrics = {
+            'total_queries': len(sub_questions),
+            'api_calls_successful': 0,
+            'api_calls_failed': 0,
+            'total_raw_results': 0,
+            'results_above_threshold': 0,
+            'scheduled_for_scraping': 0,
+            'scraping_successful': 0,
+            'scraping_failed': 0,
+            'pdf_extractions': 0,
+            'garbage_filtered': 0,
+            'llm_cleaned': 0,
+            'final_research_items': 0
+        }
+        
         if config.RESEARCH_PARALLELISM_ENABLED:
             sem = asyncio.Semaphore(config.SERPER_MAX_CONCURRENCY)
+            print(f"📊 PARALLELISM DEBUG: Using semaphore with {config.SERPER_MAX_CONCURRENCY} concurrent searches")
 
-            async def _bounded_search(q: str):
+            async def _bounded_search(q: str, index: int):
+                query_start = time.time()
+                print(f"🔍 QUERY {index+1} DEBUG: Starting search for '{q[:50]}...' at {query_start:.2f}")
                 async with sem:
-                    return await search_serper(q, ctx.deps.api_key, ctx.deps.max_results)
+                    try:
+                        result = await search_serper(q, ctx.deps.api_key, ctx.deps.max_results)
+                        funnel_metrics['api_calls_successful'] += 1
+                        query_end = time.time()
+                        print(f"✅ QUERY {index+1} DEBUG: Completed in {query_end - query_start:.2f}s at {query_end:.2f}")
+                        return result
+                    except Exception as e:
+                        funnel_metrics['api_calls_failed'] += 1
+                        print(f"❌ QUERY {index+1} DEBUG: Failed in {time.time() - query_start:.2f}s: {e}")
+                        return []
 
-            search_tasks = [_bounded_search(question) for question in sub_questions]
+            search_tasks = [_bounded_search(question, i) for i, question in enumerate(sub_questions)]
             search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
         else:
             # Previous behavior: unbounded gather (usually small N)
+            print(f"🚀 PARALLELISM DEBUG: Using unbounded parallel execution")
             search_tasks = [
                 search_serper(question, ctx.deps.api_key, ctx.deps.max_results)
                 for question in sub_questions
             ]
             search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        
+        end_time = time.time()
+        print(f"🏁 PARALLELISM DEBUG: All {len(sub_questions)} queries completed in {end_time - start_time:.2f}s total")
         print(f"🔍 SERPER TOOL DEBUG: Received {len(search_results)} search results")
         
-        # Combine results
+        # FUNNEL TRACKING: Combine results and count raw results
         all_results = []
         for i, results in enumerate(search_results):
             if isinstance(results, list):
                 print(f"📊 SERPER TOOL DEBUG: Search {i+1} returned {len(results)} results")
                 all_results.extend(results)
+                funnel_metrics['total_raw_results'] += len(results)
             else:
                 print(f"⚠️ SERPER TOOL DEBUG: Search {i+1} returned non-list: {type(results)}")
         
         print(f"📊 SERPER TOOL DEBUG: Total combined results: {len(all_results)}")
+        print(f"📈 FUNNEL STEP 1: API Results - {funnel_metrics['total_raw_results']} raw results from {funnel_metrics['api_calls_successful']} successful API calls")
         
+        # FUNNEL TRACKING: Count items that went through quality grading and scraping
+        for result in all_results:
+            if result.relevance_score and result.relevance_score >= 0.5:
+                funnel_metrics['results_above_threshold'] += 1
+            
+            if result.metadata and result.metadata.get('should_scrape', False):
+                funnel_metrics['scheduled_for_scraping'] += 1
+                
+            if result.content_scraped:
+                funnel_metrics['scraping_successful'] += 1
+                if getattr(result, 'is_pdf_content', False):
+                    funnel_metrics['pdf_extractions'] += 1
+            elif result.scraping_error:
+                funnel_metrics['scraping_failed'] += 1
+
+        print(f"📈 FUNNEL STEP 2: Quality Filter - {funnel_metrics['results_above_threshold']} results above 0.5 threshold")
+        print(f"📈 FUNNEL STEP 3: Scraping Queue - {funnel_metrics['scheduled_for_scraping']} items scheduled for scraping")
+        print(f"📈 FUNNEL STEP 4: Scraping Results - {funnel_metrics['scraping_successful']} successful (including {funnel_metrics['pdf_extractions']} PDFs), {funnel_metrics['scraping_failed']} failed")
+
         # PERFORMANCE OPTIMIZATION: Apply programmatic garbage filtering before expensive LLM cleaning
         # This prevents wasting compute resources on low-quality content
         scraped_items = [item for item in all_results if item.scraped_content and item.content_scraped]
@@ -362,11 +561,13 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
                 item.pre_filter_content_length = len(item.scraped_content or "")
                 
                 # Apply quality filtering using comprehensive programmatic analysis
+                # CRITICAL: Pass PDF flag to exemp PDF content from garbage filtering
                 should_filter, filter_reason = content_filter.should_filter_content(
                     content=item.scraped_content,
                     url=item.source_url or "",
                     title=item.title or "",
-                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD  # Configurable threshold
+                    quality_threshold=config.GARBAGE_FILTER_THRESHOLD,  # Configurable threshold
+                    is_pdf_content=getattr(item, 'is_pdf_content', False)  # PDF exemption flag
                 )
                 
                 # Get detailed quality analysis for insights
@@ -386,6 +587,7 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
                     item.filter_reason = filter_reason
                     item.post_filter_content = None  # No content passed filtering
                     item.post_filter_content_length = 0
+                    funnel_metrics['garbage_filtered'] += 1
                     item.content_cleaned = False  # Skip expensive LLM cleaning
                     
                     # Store filtering metadata for transparency
@@ -445,6 +647,7 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
                     original_length = len(item.scraped_content)
                     item.scraped_content = cleaned_content
                     item.content_cleaned = True
+                    funnel_metrics['llm_cleaned'] += 1
                     item.original_content_length = original_length
                     item.cleaned_content_length = len(cleaned_content)
                     item.content_length = len(cleaned_content)  # Fix: should reflect cleaned length
@@ -479,6 +682,26 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         ctx.deps.research_results = cleaned_results
         ctx.deps.sub_questions = sub_questions
         
+        # FINAL FUNNEL REPORT: Complete research funnel performance  
+        total_time = time.time() - agent_start_time
+        print(f"\n" + "="*80)
+        print(f"📈 RESEARCH FUNNEL PERFORMANCE REPORT")
+        print(f"="*80)
+        print(f"⚡ Total Processing Time: {total_time:.2f}s")
+        print(f"🔄 Queries Processed: {funnel_metrics['total_queries']}")
+        print(f"📊 API Success Rate: {funnel_metrics['api_calls_successful']}/{funnel_metrics['api_calls_successful'] + funnel_metrics['api_calls_failed']} ({100 * funnel_metrics['api_calls_successful'] / max(1, funnel_metrics['api_calls_successful'] + funnel_metrics['api_calls_failed']):.1f}%)")
+        print(f"🔍 Raw Results: {funnel_metrics['total_raw_results']}")
+        print(f"🎯 Above Threshold (≥0.5): {funnel_metrics['results_above_threshold']} ({100 * funnel_metrics['results_above_threshold'] / max(1, funnel_metrics['total_raw_results']):.1f}%)")
+        print(f"📋 Scheduled for Scraping: {funnel_metrics['scheduled_for_scraping']}")
+        print(f"✅ Scraping Success: {funnel_metrics['scraping_successful']} ({100 * funnel_metrics['scraping_successful'] / max(1, funnel_metrics['scheduled_for_scraping']):.1f}%)")
+        print(f"📄 PDF Extractions: {funnel_metrics['pdf_extractions']}")
+        print(f"❌ Scraping Failed: {funnel_metrics['scraping_failed']}")
+        print(f"🗑️  Garbage Filtered: {funnel_metrics['garbage_filtered']}")
+        print(f"🧽 LLM Cleaned: {funnel_metrics['llm_cleaned']}")
+        print(f"📝 Final Research Items: {funnel_metrics['final_research_items']}")
+        print(f"🎯 Conversion Rate: {100 * funnel_metrics['final_research_items'] / max(1, funnel_metrics['total_raw_results']):.1f}% (raw → final)")
+        print(f"="*80 + "\n")
+
         # CRITICAL FIX: Return ResearchPipelineModel instead of dict to prevent infinite agent loop
         return ResearchPipelineModel(
             original_query=query,
@@ -486,7 +709,7 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
             results=cleaned_results,  # Already ResearchItem objects
             pipeline_type="serper",
             total_results=len(cleaned_results),
-            processing_time=0.0  # Will be calculated at agent level
+            processing_time=total_time
         )
                
     except Exception as e:

@@ -53,9 +53,12 @@ class PDFTextExtractor:
             # Open PDF document from bytes
             doc = fitz.open("pdf", pdf_bytes)
             
+            # CRITICAL FIX: Store page count before closing document
+            page_count = doc.page_count
+            
             # Extract text from all pages
             text_parts = []
-            for page_num in range(doc.page_count):
+            for page_num in range(page_count):
                 page = doc[page_num]
                 page_text = page.get_text()
                 
@@ -66,7 +69,7 @@ class PDFTextExtractor:
             
             # Combine all pages
             full_text = " ".join(text_parts)
-            doc.close()
+            doc.close()  # Close document after extracting all needed data
             
             processing_time = time.time() - start_time
             
@@ -75,7 +78,7 @@ class PDFTextExtractor:
                     success=False,
                     text_content="",
                     error_reason="No extractable text found (may be scanned/image-based PDF)",
-                    page_count=doc.page_count,
+                    page_count=page_count,  # Use stored page count
                     processing_time=processing_time,
                     pdf_size_bytes=len(pdf_bytes)
                 )
@@ -83,7 +86,7 @@ class PDFTextExtractor:
             return PDFExtractionResult(
                 success=True,
                 text_content=full_text,
-                page_count=doc.page_count,
+                page_count=page_count,  # Use stored page count
                 text_length=len(full_text),
                 processing_time=processing_time,
                 pdf_size_bytes=len(pdf_bytes)
