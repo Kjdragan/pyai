@@ -25,6 +25,16 @@ logging_manager = initialize_logging(
     enable_logfire=True
 )
 
+# Configure Observability Shim (standard tags/attributes, previews)
+from observability import configure_observability
+configure_observability(
+    service_name="pyai",
+    environment=os.getenv("ENV", "dev"),
+    service_version=os.getenv("SERVICE_VERSION", "0.0.0"),
+    inline_sample=float(os.getenv("OBS_INLINE_SAMPLE", "1.0")),
+    preview_limit=int(os.getenv("OBS_PREVIEW_LIMIT", "2048")),
+)
+
 # Display Logfire dashboard URL if enabled
 if logging_manager.enable_logfire:
     print(f"📊 Logfire Dashboard: {logging_manager.get_logfire_dashboard_url()}")

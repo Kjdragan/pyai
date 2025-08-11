@@ -159,9 +159,8 @@ async def search_serper(query: str, api_key: str, max_results: int = 10) -> List
                 
                 final_results.append(result)
             
-            # FUNNEL TRACKING: Count final results
-            if result.content_scraped or result.snippet:
-                funnel_metrics['final_research_items'] += 1
+            # FUNNEL TRACKING: Count final results (removed undefined variable reference)
+            # Note: Funnel metrics tracked in main perform_serper_research function
             
             # ADAPTIVE FALLBACK SCRAPING: Ensure we have at least 20 total successful sources (including PDFs)
             scraped_count = sum(1 for r in final_results if r.content_scraped)
@@ -411,6 +410,24 @@ async def expand_query_intelligently(ctx: RunContext[SerperResearchDeps], query:
 @serper_research_agent.tool
 async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: str) -> ResearchPipelineModel:
     """Tool to perform comprehensive Serper research and return ResearchPipelineModel."""
+    # Initialize variables at function start to prevent undefined errors
+    import time
+    agent_start_time = time.time()
+    funnel_metrics = {
+        'total_queries': 0,
+        'api_calls_successful': 0,
+        'api_calls_failed': 0,
+        'total_raw_results': 0,
+        'results_above_threshold': 0,
+        'scheduled_for_scraping': 0,
+        'scraping_successful': 0,
+        'scraping_failed': 0,
+        'pdf_extractions': 0,
+        'garbage_filtered': 0,
+        'llm_cleaned': 0,
+        'final_research_items': 0
+    }
+    
     try:
         print(f"🔍 SERPER TOOL DEBUG: Starting research for query: {query}")
         
@@ -430,8 +447,15 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         # NEW APPROACH: Process single query directly from orchestrator
         # Each agent instance now handles one specific query instead of multiple sub-queries
         if "Process this single query directly" in query:
-            # Extract the actual query from the orchestrator instruction
-            actual_query = query.split("comprehensive research on: ")[1].split(". IMPORTANT:")[0]
+            # Extract the actual query from the orchestrator instruction - handle multiple formats
+            if ". IMPORTANT:" in query:
+                actual_query = query.split(". IMPORTANT:")[0]
+            elif "comprehensive research on: " in query:
+                actual_query = query.split("comprehensive research on: ")[1].split(". IMPORTANT:")[0]
+            else:
+                # Fallback: use everything before the instruction marker
+                actual_query = query.replace(". IMPORTANT: Process this single query directly - do not expand into sub-queries.", "").strip()
+            
             sub_questions = [actual_query]
             print(f"🎯 SERPER TOOL DEBUG: Processing single query from orchestrator: '{actual_query}'")
         else:
@@ -461,21 +485,8 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         start_time = time.time()
         print(f"🚀 PARALLELISM DEBUG: Starting {len(sub_questions)} queries in parallel at {start_time:.2f}")
         
-        # FUNNEL PERFORMANCE: Initialize tracking metrics
-        funnel_metrics = {
-            'total_queries': len(sub_questions),
-            'api_calls_successful': 0,
-            'api_calls_failed': 0,
-            'total_raw_results': 0,
-            'results_above_threshold': 0,
-            'scheduled_for_scraping': 0,
-            'scraping_successful': 0,
-            'scraping_failed': 0,
-            'pdf_extractions': 0,
-            'garbage_filtered': 0,
-            'llm_cleaned': 0,
-            'final_research_items': 0
-        }
+        # FUNNEL PERFORMANCE: Update tracking metrics with actual query count
+        funnel_metrics['total_queries'] = len(sub_questions)
         
         if config.RESEARCH_PARALLELISM_ENABLED:
             sem = asyncio.Semaphore(config.SERPER_MAX_CONCURRENCY)
@@ -677,6 +688,9 @@ async def perform_serper_research(ctx: RunContext[SerperResearchDeps], query: st
         # Clean and format results
         cleaned_results = clean_and_format_results(all_results, query)
         print(f"✨ SERPER TOOL DEBUG: After cleaning: {len(cleaned_results)} results")
+        
+        # FUNNEL TRACKING: Count final research items (moved from search_serper where funnel_metrics was undefined)
+        funnel_metrics['final_research_items'] = len(cleaned_results)
         
         # Store results in context for agent access
         ctx.deps.research_results = cleaned_results

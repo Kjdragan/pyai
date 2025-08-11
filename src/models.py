@@ -138,6 +138,76 @@ class UniversalReportData(BaseModel):
         """Check if any data sources are available."""
         return any([self.youtube_data, self.research_data, self.weather_data])
     
+    def has_substantial_research_content(self) -> bool:
+        """Check if research data contains substantial content - prevents LLM training data fallbacks."""
+        if not self.research_data or not self.research_data.results:
+            return False
+        
+        # Count results with substantial content (not just snippets)
+        substantial_results = []
+        for result in self.research_data.results:
+            content_length = 0
+            has_scraped = False
+            
+            # Prioritize scraped content over snippets
+            if result.scraped_content and len(result.scraped_content.strip()) > 200:
+                content_length = len(result.scraped_content.strip())
+                has_scraped = True
+            elif result.snippet and len(result.snippet.strip()) > 100:
+                content_length = len(result.snippet.strip())
+            
+            # Quality criteria: substantial content and preferably scraped
+            if content_length >= 200 or (content_length >= 100 and has_scraped):
+                substantial_results.append(result)
+        
+        # Require minimum 3 substantial research results to prevent training data fallback
+        has_minimum_content = len(substantial_results) >= 3
+        total_content_length = sum(
+            len(r.scraped_content or r.snippet or "") for r in substantial_results
+        )
+        has_sufficient_volume = total_content_length >= 1000  # Minimum 1000 chars total
+        
+        return has_minimum_content and has_sufficient_volume
+    
+    def get_research_content_stats(self) -> dict:
+        """Get detailed statistics about research content quality."""
+        if not self.research_data or not self.research_data.results:
+            return {
+                "total_results": 0,
+                "scraped_results": 0,
+                "snippet_only_results": 0,
+                "total_content_length": 0,
+                "substantial_results": 0,
+                "meets_minimum_threshold": False
+            }
+        
+        stats = {
+            "total_results": len(self.research_data.results),
+            "scraped_results": 0,
+            "snippet_only_results": 0,
+            "total_content_length": 0,
+            "substantial_results": 0,
+            "meets_minimum_threshold": False
+        }
+        
+        for result in self.research_data.results:
+            if result.scraped_content and len(result.scraped_content.strip()) > 200:
+                stats["scraped_results"] += 1
+                stats["total_content_length"] += len(result.scraped_content.strip())
+                stats["substantial_results"] += 1
+            elif result.snippet and len(result.snippet.strip()) > 100:
+                stats["snippet_only_results"] += 1
+                stats["total_content_length"] += len(result.snippet.strip())
+                if len(result.snippet.strip()) >= 200:
+                    stats["substantial_results"] += 1
+        
+        stats["meets_minimum_threshold"] = (
+            stats["substantial_results"] >= 3 and 
+            stats["total_content_length"] >= 1000
+        )
+        
+        return stats
+    
     def get_data_types(self) -> List[str]:
         """Get list of available data types."""
         types = []

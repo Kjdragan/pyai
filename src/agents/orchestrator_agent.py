@@ -25,6 +25,9 @@ try:
 except Exception:  # pragma: no cover
     logfire = None
 
+# Observability shim: standard tracing and tags
+from observability import start_orchestration, agent_span
+
 
 class OrchestratorDeps:
     """Dependencies for Orchestrator Agent with centralized state management and execution tracking."""
@@ -1137,11 +1140,19 @@ async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdat
         # Create dependencies with state manager
         deps = OrchestratorDeps(state_manager=state_manager)
         
-        # Run the actual Pydantic AI orchestrator agent
-        result = await orchestrator_agent.run(
-            job_request.query,
-            deps=deps
-        )
+        # Run the actual Pydantic AI orchestrator agent within orchestration span
+        with start_orchestration(
+            run_id=state_manager.get_master_state().orchestrator_id,
+            tags=[f"job:{job_request.job_type}"],
+            attrs={
+                "pyai.job.type": job_request.job_type,
+            },
+        ):
+            with agent_span("OrchestratorAgent"):
+                result = await orchestrator_agent.run(
+                    job_request.query,
+                    deps=deps
+                )
         
         # Update final state in the centralized state manager
         processing_time = asyncio.get_event_loop().time() - deps.start_time
@@ -1194,7 +1205,7 @@ async def run_orchestrator_job(user_input: str) -> AsyncGenerator[StreamingUpdat
         )
         # DEV-ONLY TRACING: emit a consolidated run summary to Logfire and logs
         try:
-            run_id = state_manager.orchestrator_id
+            run_id = master_output.orchestrator_id
             summary_payload = run_summary.emit({
                 "run_id": run_id,
                 "job_type": master_output.job_request.job_type if hasattr(master_output, "job_request") and master_output.job_request else job_request.job_type,
